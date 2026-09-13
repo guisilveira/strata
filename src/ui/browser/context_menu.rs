@@ -1077,9 +1077,7 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
         target.replace(Some((position, entry.clone())));
         let entries = context_entries(&state, &target);
         run.set_visible(
-            !in_trash
-                && entries.len() == 1
-                && super::desktop::entry_is_regular_executable(&entry),
+            !in_trash && entries.len() == 1 && super::desktop::entry_is_regular_executable(&entry),
         );
         let open_with_entries = entries.clone();
         open_with.set_visible(open_with_entries.len() == 1);
