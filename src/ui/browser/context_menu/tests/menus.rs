@@ -21,6 +21,7 @@ impl FileSource for MenuSource {
             let entries = [
                 "notes.txt",
                 "other.txt",
+                "run-me",
                 "picture.png",
                 "archive.zip",
                 "archive.rar",
@@ -40,7 +41,11 @@ impl FileSource for MenuSource {
                 },
                 size: MetadataValue::Known(5),
                 modified_unix_seconds: MetadataValue::Known(0),
-                mode: MetadataValue::Known(0o644),
+                mode: MetadataValue::Known(if matches!(name, "run-me" | "folder") {
+                    0o755
+                } else {
+                    0o644
+                }),
                 is_hidden: false,
             })
             .collect();
@@ -57,6 +62,51 @@ impl FileSource for MenuSource {
         });
         LoadHandle::new(move || task.abort())
     }
+}
+
+#[test]
+fn run_is_only_offered_for_one_regular_executable_file() {
+    crate::test_support::gtk_test(
+        "ui::browser::context_menu::tests::menus::run_is_only_offered_for_one_regular_executable_file",
+        || {
+            let fixture = tempfile::tempdir().expect("normal directory fixture");
+            for mode in [BrowserMode::Columns, BrowserMode::Icons, BrowserMode::List] {
+                let view = BrowserView::new(Rc::new(MenuSource), PeekBehavior::default());
+                view.set_view_mode(mode);
+                let window = gtk::Window::builder()
+                    .child(&view.widget())
+                    .default_width(1000)
+                    .default_height(850)
+                    .build();
+                window.present();
+                view.browser().navigate(Location::local(fixture.path()));
+                wait_until(|| label(&view.widget(), "run-me").is_some());
+
+                let menu = open_menu(&view, Some("run-me"));
+                assert_actions(&menu, &["Open", "Open With…", "Run"], &[]);
+                button_with_label(menu.upcast_ref(), "Run").emit_clicked();
+                wait_until(|| label(&view.widget(), "Run this program?").is_some());
+                button_with_label(&view.widget(), "Cancel").emit_clicked();
+                wait_until(|| label(&view.widget(), "Run this program?").is_none());
+
+                let menu = open_menu(&view, Some("notes.txt"));
+                assert_actions(&menu, &[], &["Run"]);
+                menu.popdown();
+                wait_until(|| menu.parent().is_none());
+
+                let menu = open_menu(&view, Some("folder"));
+                assert_actions(&menu, &[], &["Run"]);
+                menu.popdown();
+                wait_until(|| menu.parent().is_none());
+
+                view.select_all();
+                let menu = open_menu(&view, Some("run-me"));
+                assert_actions(&menu, &[], &["Run"]);
+                menu.popdown();
+                wait_until(|| menu.parent().is_none());
+            }
+        },
+    );
 }
 
 pub(super) fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
@@ -167,6 +217,20 @@ fn menu_labels(popover: &gtk::Popover) -> Vec<String> {
             })
         })
         .collect()
+}
+
+fn button_with_label(widget: &gtk::Widget, text: &str) -> gtk::Button {
+    descendants(widget)
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .find(|button| {
+            descendants(button.upcast_ref()).iter().any(|widget| {
+                widget
+                    .downcast_ref::<gtk::Label>()
+                    .is_some_and(|label| label.text() == text)
+            })
+        })
+        .unwrap_or_else(|| panic!("missing {text} button"))
 }
 
 fn assert_actions(popover: &gtk::Popover, present: &[&str], absent: &[&str]) {

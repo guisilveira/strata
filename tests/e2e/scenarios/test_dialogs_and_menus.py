@@ -172,6 +172,22 @@ def test_executable_without_handler_requires_confirmation(executable_file, strat
     strata.wait(lambda: strata.dialog() is None, "the confirmed program to launch")
 
 
+def test_executable_context_menu_offers_confirmed_run(executable_file, strata):
+    strata.open_context_menu(executable_file.name)
+    assert {"Open", "Open With…", "Run"} <= set(strata.menu_items())
+    strata.choose_menu_item("Run")
+
+    dialog = strata.wait_for_dialog()
+    assert "Run this program?" in dialog.dump()
+    strata.pointer.click(strata.dialog_button("Cancel"))
+    strata.wait(lambda: strata.dialog() is None, "the cancelled run dialog to close")
+
+    strata.open_context_menu(executable_file.name)
+    strata.choose_menu_item("Run")
+    strata.pointer.click(strata.dialog_button("Run"))
+    strata.wait(lambda: strata.dialog() is None, "the confirmed program to launch")
+
+
 def test_properties_pins_a_folder_and_offers_unpin_afterwards(strata):
     dialog = _open_properties(strata, "documents")
     pin = dialog.find(role="button", name="Pin")
