@@ -109,6 +109,52 @@ fn run_is_only_offered_for_one_regular_executable_file() {
     );
 }
 
+#[test]
+fn run_is_offered_for_an_executable_inline_search_result() {
+    use std::os::unix::fs::PermissionsExt;
+
+    crate::test_support::gtk_test(
+        "ui::browser::context_menu::tests::menus::run_is_offered_for_an_executable_inline_search_result",
+        || {
+            let fixture = tempfile::tempdir().expect("search fixture");
+            let program = fixture.path().join("run-search-result");
+            std::fs::write(&program, b"#!/bin/sh\n").expect("program fixture");
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                .expect("executable permissions");
+
+            for mode in [BrowserMode::Columns, BrowserMode::Icons, BrowserMode::List] {
+                let view = BrowserView::new(
+                    Rc::new(crate::adapters::LocalFileSource),
+                    PeekBehavior::default(),
+                );
+                view.set_view_mode(mode);
+                let window = gtk::Window::builder()
+                    .child(&view.widget())
+                    .default_width(1000)
+                    .default_height(850)
+                    .build();
+                window.present();
+                view.browser().navigate(Location::local(fixture.path()));
+                wait_until(|| label(&view.widget(), "run-search-result").is_some());
+                assert!(view.show_filter_with_query("run-search-result"));
+                wait_until(|| {
+                    descendants(&view.widget())
+                        .iter()
+                        .any(|widget| widget.is_mapped() && widget.has_css_class("filter-result"))
+                });
+                wait_until(|| label(&view.widget(), "run-search-result").is_some());
+
+                let menu = open_menu(&view, Some("run-search-result"));
+                assert_actions(&menu, &["Run"], &[]);
+                menu.popdown();
+                wait_until(|| menu.parent().is_none());
+                view.browser().clear_observer();
+                window.destroy();
+            }
+        },
+    );
+}
+
 pub(super) fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
     let mut result = vec![widget.clone()];
     let mut child = widget.first_child();

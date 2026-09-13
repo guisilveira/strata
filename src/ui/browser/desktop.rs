@@ -105,7 +105,10 @@ pub(super) fn is_regular_executable(path: &Path) -> bool {
 
 pub(super) fn entry_is_regular_executable(entry: &FileEntry) -> bool {
     entry.location.native_path().is_some()
-        && matches!(entry.kind, crate::model::EntryKind::File)
+        && matches!(
+            entry.kind,
+            crate::model::EntryKind::File | crate::model::EntryKind::FileSymbolicLink
+        )
         && matches!(entry.mode, crate::model::MetadataValue::Known(mode) if mode & 0o111 != 0)
 }
 
