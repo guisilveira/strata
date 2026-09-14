@@ -1420,10 +1420,16 @@ impl BrowserView {
         if self.view_mode() != BrowserMode::Columns {
             return self.state.mode_views.borrow().selected_search_results();
         }
-        let depth = self.state.destination_depth()?;
         let columns = self.state.columns.borrow();
-        let column = columns.get(depth)?;
-        column.search_handle.borrow().as_ref()?;
+        let depth = self.state.destination_depth();
+        let column = depth
+            .and_then(|depth| columns.get(depth))
+            .filter(|column| column.search_handle.borrow().is_some())
+            .or_else(|| {
+                columns
+                    .iter()
+                    .find(|column| column.search_handle.borrow().is_some())
+            })?;
         let results = column.search_results.borrow();
         Some(
             collection::bitset_positions(&column.selection.selection())
