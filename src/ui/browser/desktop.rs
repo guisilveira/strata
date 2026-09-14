@@ -97,6 +97,7 @@ fn show_open_with_fallback(
         vec![file],
         recommended_apps,
         other_apps,
+        crate::ui::open_with::OpenWithContext::ActivationFallback,
         Rc::new(move || {
             if let Some(browser) = browser.upgrade() {
                 browser.focus_active();

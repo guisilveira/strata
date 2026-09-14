@@ -37,6 +37,18 @@ def activation_fallback_app(open_with_app):
     return output, associations, contents
 
 
+@pytest.fixture
+def empty_application_data(test_environment, monkeypatch):
+    data_dirs = test_environment.root / "empty-data-dirs"
+    data_dirs.mkdir()
+    variables = test_environment.variables
+    monkeypatch.setattr(
+        test_environment,
+        "variables",
+        lambda: {**variables(), "XDG_DATA_DIRS": str(data_dirs)},
+    )
+
+
 def test_activation_without_default_opens_with_visible_application(
     activation_fallback_app, strata
 ):
@@ -61,6 +73,28 @@ def test_activation_without_default_opens_with_visible_application(
     )
     assert associations.read_text() == contents
     strata.wait(lambda: strata.dialog() is None, "the chooser to close")
+    strata.wait_for_focused_entry("todo.txt")
+
+
+def test_activation_without_selectable_application_shows_specific_empty_state(
+    empty_application_data, strata
+):
+    strata.select_entry_with_keyboard("todo.txt")
+    strata.keyboard.press("Return")
+
+    dialog = strata.wait_for_dialog()
+    strata.wait(
+        lambda: dialog.find(
+            role="label", name="No application is registered for this file"
+        )
+        is not None,
+        "the activation-specific empty feedback",
+        timeout=3.0,
+    )
+    assert "sensitive" not in strata.dialog_button("Open").states
+
+    strata.keyboard.press("Escape")
+    strata.wait(lambda: strata.dialog() is None, "the empty chooser to close")
     strata.wait_for_focused_entry("todo.txt")
 
 
