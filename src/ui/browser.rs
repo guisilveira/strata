@@ -1395,25 +1395,40 @@ impl BrowserView {
             return self.state.mode_views.borrow().selected_search_result();
         }
         let focused = self.state.overlay.root()?.focus()?;
-        self.state.columns.borrow().iter().find_map(|column| {
-            if column.search_handle.borrow().is_none()
-                || !(focused.is_ancestor(&column.filter_entry)
+        self.state
+            .columns
+            .borrow()
+            .iter()
+            .enumerate()
+            .find_map(|(depth, column)| {
+                if !(focused.is_ancestor(&column.filter_entry)
                     || focused == column.filter_entry.clone().upcast::<gtk::Widget>()
                     || focused.is_ancestor(&column.list)
                     || focused == column.list.clone().upcast::<gtk::Widget>())
-            {
-                return None;
-            }
-            let selected = column.selection.selection();
-            if selected.is_empty() {
-                return None;
-            }
-            column
-                .search_results
-                .borrow()
-                .get(selected.maximum() as usize)
-                .map(search_result_entry)
-        })
+                {
+                    return None;
+                }
+                if column.search_handle.borrow().is_some() {
+                    let selected = column.selection.selection();
+                    if selected.is_empty() {
+                        return None;
+                    }
+                    return column
+                        .search_results
+                        .borrow()
+                        .get(selected.maximum() as usize)
+                        .map(search_result_entry);
+                }
+                if column.map.has_query() {
+                    let selected = column.selection.selection();
+                    if selected.is_empty() {
+                        return None;
+                    }
+                    let source_position = column.map.source_position(selected.maximum())?;
+                    return self.state.browser.entry_at(depth, source_position);
+                }
+                None
+            })
     }
 
     pub fn selected_search_results(&self) -> Option<Vec<FileEntry>> {
@@ -1422,21 +1437,34 @@ impl BrowserView {
         }
         let columns = self.state.columns.borrow();
         let depth = self.state.destination_depth();
-        let column = depth
-            .and_then(|depth| columns.get(depth))
-            .filter(|column| column.search_handle.borrow().is_some())
+        let (depth, column) = depth
+            .and_then(|depth| columns.get(depth).map(|column| (depth, column)))
+            .filter(|(_, column)| column.search_handle.borrow().is_some() || column.map.has_query())
             .or_else(|| {
-                columns
-                    .iter()
-                    .find(|column| column.search_handle.borrow().is_some())
+                columns.iter().enumerate().find(|(_, column)| {
+                    column.search_handle.borrow().is_some() || column.map.has_query()
+                })
             })?;
-        let results = column.search_results.borrow();
-        Some(
-            collection::bitset_positions(&column.selection.selection())
-                .into_iter()
-                .filter_map(|position| results.get(position as usize).map(search_result_entry))
-                .collect(),
-        )
+        if column.search_handle.borrow().is_some() {
+            let results = column.search_results.borrow();
+            return Some(
+                collection::bitset_positions(&column.selection.selection())
+                    .into_iter()
+                    .filter_map(|position| results.get(position as usize).map(search_result_entry))
+                    .collect(),
+            );
+        }
+        if column.map.has_query() {
+            let positions = collection::bitset_positions(&column.selection.selection());
+            let mapped = column.map.source_positions(&positions);
+            return Some(
+                mapped
+                    .into_iter()
+                    .filter_map(|(_, source_pos)| self.state.browser.entry_at(depth, source_pos))
+                    .collect(),
+            );
+        }
+        None
     }
 
     pub fn item_view_has_focus(&self) -> bool {

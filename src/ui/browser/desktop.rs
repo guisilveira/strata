@@ -18,6 +18,14 @@ pub(in crate::ui) fn open_location(
     parent: &impl IsA<gtk::Widget>,
     browser: &Rc<Browser>,
 ) {
+    if is_trash_location(location) {
+        show_error_dialog(
+            parent,
+            "Unable to open item",
+            "Items in Trash cannot be opened",
+        );
+        return;
+    }
     let file = gio_file_for_location(location);
     let parent = parent.as_ref().downgrade();
     let location = location.clone();
