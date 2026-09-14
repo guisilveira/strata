@@ -26,6 +26,43 @@ def open_with_app(test_environment):
     associations.write_text(contents)
     return output, associations, contents
 
+@pytest.fixture
+def activation_fallback_app(open_with_app):
+    output, associations, _ = open_with_app
+    contents = associations.read_text().replace(
+        "text/plain=strata-review.desktop;\n",
+        "",
+    )
+    associations.write_text(contents)
+    return output, associations, contents
+
+
+def test_activation_without_default_opens_with_visible_application(
+    activation_fallback_app, strata
+):
+    output, associations, contents = activation_fallback_app
+    expected = strata.fixture.path("todo.txt")
+    strata.select_entry_with_keyboard("todo.txt")
+    strata.keyboard.press("Return")
+
+    dialog = strata.wait_for_dialog()
+    assert "Review Text Viewer" in dialog.dump()
+    strata.keyboard.type_text("Review Text Viewer")
+    strata.keyboard.press("Return")
+    strata.wait(
+        lambda: output.exists() and output.read_text(),
+        "the selected application to receive the activated file",
+    )
+
+    received = output.read_text().splitlines()
+    assert len(received) == 1
+    assert Gio.File.new_for_commandline_arg(received[0]).equal(
+        Gio.File.new_for_path(str(expected))
+    )
+    assert associations.read_text() == contents
+    strata.wait(lambda: strata.dialog() is None, "the chooser to close")
+    strata.wait_for_focused_entry("todo.txt")
+
 
 @pytest.mark.parametrize("target", ["todo.txt", "documents", "background"])
 def test_open_with_launches_without_changing_default(open_with_app, strata, target):
