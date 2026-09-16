@@ -18,8 +18,8 @@ use crate::{
 
 use super::{
     DEFAULT_ACCELS, EncryptedMediaAction, MediaRelease, MouseHistoryAction, PinStatus,
-    SIDEBAR_WIDTH, STANDARD_PLACE_IDS, TrashContents, TrashMenuVisibility, TypeToSearchQuery,
-    accepts_sidebar_reorder_payload, begin_media_release, browser_for_window,
+    RecentAvailability, SIDEBAR_WIDTH, STANDARD_PLACE_IDS, TrashContents, TrashMenuVisibility,
+    TypeToSearchQuery, accepts_sidebar_reorder_payload, begin_media_release, browser_for_window,
     browser_mode_for_digit, build_sidebar, confirm_forget_cached_password, continue_encrypted_lock,
     device_row_actions, event_changes_trash_contents, is_context_menu_shortcut,
     is_native_editing_shortcut, is_open_terminal_shortcut, is_refresh_shortcut, is_rename_shortcut,
@@ -28,9 +28,9 @@ use super::{
     media_release_label, mouse_history_action, page_direction, parse_pinned_drag_source,
     parse_pinned_places, pin_status, pinned_places_path, remove_pinned_place,
     reorder_pinned_places, reorder_places, resolve_place_order, serialize_pinned_places,
-    should_show_standard_place, sidebar_accepts_file_drop, sidebar_update_label, standard_place,
-    trash_contents_from_probe, trash_has_entries, trash_menu_visibility, type_to_search_query,
-    vim_focus_direction, volume_release_action,
+    should_show_recent_place, should_show_standard_place, sidebar_accepts_file_drop,
+    sidebar_update_label, standard_place, trash_contents_from_probe, trash_has_entries,
+    trash_menu_visibility, type_to_search_query, vim_focus_direction, volume_release_action,
 };
 
 #[test]
@@ -1117,9 +1117,70 @@ fn sidebar_file_drops_accept_local_places_but_not_virtual_locations() {
     )));
     assert!(!sidebar_accepts_file_drop(&Location::uri("trash:///")));
     assert!(!sidebar_accepts_file_drop(&Location::uri("network:///")));
+    assert!(!sidebar_accepts_file_drop(&Location::uri("recent:///")));
     assert!(!sidebar_accepts_file_drop(&Location::uri(
         "smb://host.example/share"
     )));
+}
+
+#[test]
+fn recent_sidebar_is_visible_when_preference_and_availability_allow_it() {
+    assert!(should_show_recent_place(
+        true,
+        false,
+        RecentAvailability {
+            platform_tracking_enabled: true,
+            runtime_backend_supported: true,
+        },
+    ));
+}
+
+#[test]
+fn recent_sidebar_is_hidden_when_its_visibility_preference_is_disabled() {
+    assert!(!should_show_recent_place(
+        false,
+        false,
+        RecentAvailability {
+            platform_tracking_enabled: true,
+            runtime_backend_supported: true,
+        },
+    ));
+}
+
+#[test]
+fn recent_sidebar_is_hidden_when_platform_recent_tracking_is_disabled() {
+    assert!(!should_show_recent_place(
+        true,
+        false,
+        RecentAvailability {
+            platform_tracking_enabled: false,
+            runtime_backend_supported: true,
+        },
+    ));
+}
+
+#[test]
+fn recent_sidebar_is_hidden_when_the_runtime_backend_is_unavailable() {
+    assert!(!should_show_recent_place(
+        true,
+        false,
+        RecentAvailability {
+            platform_tracking_enabled: true,
+            runtime_backend_supported: false,
+        },
+    ));
+}
+
+#[test]
+fn recent_sidebar_is_hidden_in_local_only_contexts() {
+    assert!(!should_show_recent_place(
+        true,
+        true,
+        RecentAvailability {
+            platform_tracking_enabled: true,
+            runtime_backend_supported: true,
+        },
+    ));
 }
 
 #[test]

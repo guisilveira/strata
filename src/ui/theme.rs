@@ -145,6 +145,8 @@ struct Preferences {
     #[serde(default = "default_enabled")]
     sidebar_show_network: bool,
     #[serde(default = "default_enabled")]
+    sidebar_show_recent: bool,
+    #[serde(default = "default_enabled")]
     sidebar_show_desktop: bool,
     #[serde(default = "default_enabled")]
     sidebar_show_documents: bool,
@@ -218,6 +220,7 @@ impl Default for Preferences {
             sidebar_show_home: true,
             sidebar_show_trash: true,
             sidebar_show_network: true,
+            sidebar_show_recent: true,
             sidebar_show_desktop: true,
             sidebar_show_documents: true,
             sidebar_show_downloads: true,
@@ -907,6 +910,15 @@ impl ThemeManager {
         self.save_preferences();
     }
 
+    pub fn sidebar_show_recent(&self) -> bool {
+        self.preferences.borrow().sidebar_show_recent
+    }
+
+    pub fn set_sidebar_show_recent(&self, visible: bool) {
+        self.preferences.borrow_mut().sidebar_show_recent = visible;
+        self.save_preferences();
+    }
+
     pub fn sidebar_show_desktop(&self) -> bool {
         self.preferences.borrow().sidebar_show_desktop
     }
@@ -952,12 +964,13 @@ impl ThemeManager {
         self.save_preferences();
     }
 
-    pub fn sidebar_places_visibility(&self) -> [bool; 8] {
+    pub fn sidebar_places_visibility(&self) -> [bool; 9] {
         let preferences = self.preferences.borrow();
         [
             preferences.sidebar_show_home,
             preferences.sidebar_show_trash,
             preferences.sidebar_show_network,
+            preferences.sidebar_show_recent,
             preferences.sidebar_show_desktop,
             preferences.sidebar_show_documents,
             preferences.sidebar_show_downloads,

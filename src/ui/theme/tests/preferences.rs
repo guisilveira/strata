@@ -43,6 +43,7 @@ fn non_default_preferences() -> Preferences {
         sidebar_show_home: false,
         sidebar_show_trash: false,
         sidebar_show_network: false,
+        sidebar_show_recent: false,
         sidebar_show_desktop: false,
         sidebar_show_documents: false,
         sidebar_show_downloads: false,
@@ -432,6 +433,7 @@ fn every_saved_preference_loads_before_any_settings_page_exists() {
             assert!(!manager.sidebar_show_home());
             assert!(!manager.sidebar_show_trash());
             assert!(!manager.sidebar_show_network());
+            assert!(!manager.sidebar_show_recent());
             assert!(!manager.sidebar_show_desktop());
             assert!(!manager.sidebar_show_documents());
             assert!(!manager.sidebar_show_downloads());
@@ -439,7 +441,9 @@ fn every_saved_preference_loads_before_any_settings_page_exists() {
             assert!(!manager.sidebar_show_videos());
             assert_eq!(
                 manager.sidebar_places_visibility(),
-                [false, false, false, false, false, false, false, false]
+                [
+                    false, false, false, false, false, false, false, false, false
+                ]
             );
             assert_eq!(manager.text_size(), TextSize::new(24));
             assert_eq!(
@@ -566,6 +570,7 @@ fn all_preference_setters_publish_and_persist_without_duplicate_notifications() 
                 |m| m.set_sidebar_show_home(true),
                 |m| m.set_sidebar_show_trash(true),
                 |m| m.set_sidebar_show_network(true),
+                |m| m.set_sidebar_show_recent(true),
                 |m| m.set_sidebar_show_desktop(true),
                 |m| m.set_sidebar_show_documents(true),
                 |m| m.set_sidebar_show_downloads(true),
