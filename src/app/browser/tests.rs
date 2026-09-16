@@ -23,6 +23,7 @@ mod navigation;
 mod operation_events;
 mod operations;
 mod preferences;
+mod recent;
 mod relocation;
 mod selection;
 #[path = "sorting/tests.rs"]

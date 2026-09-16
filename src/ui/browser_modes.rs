@@ -948,6 +948,10 @@ impl ModeViews {
     fn grouping_for_snapshot(&self, depth: usize, snapshot: &BrowserColumnSnapshot) -> bool {
         // GTK 4.22 cannot safely section interleaved camera batches. Device order
         // must also remain ungrouped after completion rather than reshuffling rows.
+        // Recent must keep one global recency sequence instead of grouping folders ahead.
+        if snapshot.location.is_recent_root() {
+            return false;
+        }
         let device_order = self
             .browser
             .column_preferences(depth)
@@ -2614,10 +2618,18 @@ fn build_list_pane(
         ));
     }
     actions.append(&super::browser::pane_refresh_button(&browser, depth));
-    if browser
-        .location_at(depth)
-        .is_some_and(|location| location.is_camera_photo_root())
-    {
+    let camera_photos = location
+        .as_ref()
+        .is_some_and(|location| location.is_camera_photo_root());
+    let recent = location
+        .as_ref()
+        .is_some_and(|location| location.is_recent_root());
+    if recent {
+        actions.append(&super::browser::column_sort_direction_toggle(
+            &browser, depth,
+        ));
+    }
+    if camera_photos || recent {
         actions.append(&super::browser::column_sort_menu(&browser, depth));
     }
     let (filter_entry, filter_revealer, filter_button) = filter_controls("Filter list (Ctrl+F)");

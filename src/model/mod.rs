@@ -284,6 +284,8 @@ impl Location {
 pub enum SortKey {
     /// Camera-library-local streaming order; never a saved folder default.
     DeviceOrder,
+    /// Recent-library-local use time; never a saved folder default.
+    Recency,
     Name,
     Type,
     Size,

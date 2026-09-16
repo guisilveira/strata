@@ -1304,6 +1304,39 @@ fn changing_sort_preferences_only_reorders_the_target_column() {
     assert_eq!(state.columns[1].entries[0].display_name, "z");
 }
 
+#[test]
+fn recency_sort_uses_existing_metadata_availability_order() {
+    let mut newest = file_entry("/fixture/newest", "newest");
+    newest.recent_unix_seconds = MetadataValue::Known(20);
+    let mut older = file_entry("/fixture/older", "older");
+    older.recent_unix_seconds = MetadataValue::Known(10);
+    let mut unavailable = file_entry("/fixture/unavailable", "unavailable");
+    unavailable.recent_unix_seconds = MetadataValue::Unavailable;
+    let unknown = file_entry("/fixture/unknown", "unknown");
+    let mut entries = [unknown, unavailable, older, newest];
+
+    entries.sort_by(|left, right| {
+        compare_entries(
+            left,
+            right,
+            ViewPreferences {
+                sort_key: SortKey::Recency,
+                sort_direction: SortDirection::Descending,
+                folders_first: false,
+                show_hidden: false,
+            },
+        )
+    });
+
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.display_name.as_str())
+            .collect::<Vec<_>>(),
+        ["unavailable", "unknown", "newest", "older"]
+    );
+}
+
 fn file_entry(path: &str, name: &str) -> FileEntry {
     FileEntry {
         location: location(path),

@@ -971,11 +971,15 @@ impl ThemeManager {
     }
 
     pub fn set_sort_preferences(&self, preferences: ViewPreferences) {
+        if preferences.sort_key == SortKey::Recency {
+            return;
+        }
         let mut stored = self.preferences.borrow_mut();
         stored.show_hidden = preferences.show_hidden;
         stored.folders_first = preferences.folders_first;
         let sort_key = match preferences.sort_key {
             SortKey::DeviceOrder => None,
+            SortKey::Recency => None,
             SortKey::Name => Some("name"),
             SortKey::Size => Some("size"),
             SortKey::Modified => Some("modified"),

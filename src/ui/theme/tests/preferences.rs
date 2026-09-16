@@ -2,6 +2,7 @@
 
 use super::super::*;
 use crate::{
+    model::{SortDirection, SortKey, ViewPreferences},
     test_support::gtk_test,
     ui::browser_modes::{BrowserDensity, BrowserMode, ClickCount},
 };
@@ -91,6 +92,30 @@ impl ThemeManager {
         )
         .expect("persist complete fixture");
     }
+}
+
+#[test]
+fn recent_sort_is_not_stored_as_an_ordinary_folder_default() {
+    gtk_test(
+        "ui::theme::tests::preferences::recent_sort_is_not_stored_as_an_ordinary_folder_default",
+        || {
+            ThemeManager::seed_saved_preferences_for_test();
+            let manager = ThemeManager::load();
+            let saved = manager.preferences.borrow().clone();
+
+            manager.set_sort_preferences(ViewPreferences {
+                sort_key: SortKey::Recency,
+                sort_direction: SortDirection::Descending,
+                ..ViewPreferences::default()
+            });
+
+            assert_eq!(*manager.preferences.borrow(), saved);
+            let persisted: Preferences =
+                toml::from_str(&fs::read_to_string(settings_path()).expect("saved preferences"))
+                    .expect("persisted preferences");
+            assert_eq!(persisted, saved);
+        },
+    );
 }
 
 #[test]
