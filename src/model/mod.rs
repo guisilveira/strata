@@ -53,7 +53,15 @@ impl Location {
         }
     }
 
+    pub fn is_recent_root(&self) -> bool {
+        self.uri_value()
+            .is_some_and(|uri| uri.eq_ignore_ascii_case("recent:///"))
+    }
+
     pub fn parent(&self) -> Option<Self> {
+        if self.is_recent_root() {
+            return None;
+        }
         match &self.kind {
             LocationKind::Native(path) => {
                 let parent = path.parent()?;
@@ -224,6 +232,9 @@ impl Location {
     }
 
     pub fn display_name(&self) -> String {
+        if self.is_recent_root() {
+            return "Recent".into();
+        }
         if self.is_camera_photo_root() {
             return "Photos".into();
         }
@@ -249,6 +260,9 @@ impl Location {
     }
 
     pub fn breadcrumbs(&self) -> Vec<Self> {
+        if self.is_recent_root() {
+            return vec![self.clone()];
+        }
         if let Some(path) = self.native_path() {
             let mut locations: Vec<_> = path.ancestors().map(Self::local).collect();
             locations.reverse();
@@ -328,6 +342,8 @@ pub struct FileEntry {
     pub kind: EntryKind,
     pub size: MetadataValue<u64>,
     pub modified_unix_seconds: MetadataValue<i64>,
+    /// Platform Recent use time, independent of filesystem modification time.
+    pub recent_unix_seconds: MetadataValue<i64>,
     pub mode: MetadataValue<u32>,
     pub image_dimensions: MetadataValue<(u32, u32)>,
     pub child_count: MetadataValue<u64>,

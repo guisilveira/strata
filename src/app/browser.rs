@@ -2875,11 +2875,11 @@ fn location_from_input_with_home(
     let normalized = scheme.to_ascii_lowercase();
     if !matches!(
         normalized.as_str(),
-        "smb" | "sftp" | "ftp" | "ftps" | "dav" | "davs" | "trash" | "network"
+        "smb" | "sftp" | "ftp" | "ftps" | "dav" | "davs" | "trash" | "network" | "recent"
     ) {
         return Err(LocationValidationError::UnsupportedScheme(format!(
             "The {scheme}:// scheme isn't supported. Use an absolute local path or one of: \
-             smb://, sftp://, ftp://, ftps://, dav://, or davs://."
+             smb://, sftp://, ftp://, ftps://, dav://, davs://, or recent:///."
         )));
     }
     validate_uri_credentials(input)?;

@@ -443,12 +443,94 @@ fn watching_a_uri_location_reports_created_entries() {
     );
 }
 
+#[test]
+fn watching_recent_root_is_disabled() {
+    let changes: Rc<RefCell<Vec<DirectoryChange>>> = Rc::new(RefCell::new(Vec::new()));
+    let collected = changes.clone();
+
+    let handle = LocalFileSource.watch(
+        Location::uri("recent:///"),
+        false,
+        Rc::new(move |change| collected.borrow_mut().push(change)),
+    );
+
+    assert!(handle.is_none());
+    assert!(changes.borrow().is_empty());
+}
+
 fn unique_fixture_root(label: &str) -> std::path::PathBuf {
     let unique = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("the system clock should be after the Unix epoch")
         .as_nanos();
     std::env::temp_dir().join(format!("strata-local-files-{label}-{unique}"))
+}
+
+struct RecentFixtureSource {
+    entries: RefCell<VecDeque<RecentEntryResolution>>,
+    requests: Rc<RefCell<Vec<usize>>>,
+    pending_after_first_batch: bool,
+}
+
+impl RecentFixtureSource {
+    fn new(
+        entries: Vec<RecentEntryResolution>,
+        pending_after_first_batch: bool,
+    ) -> (Self, Rc<RefCell<Vec<usize>>>) {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        (
+            Self {
+                entries: RefCell::new(entries.into_iter().collect()),
+                requests: requests.clone(),
+                pending_after_first_batch,
+            },
+            requests,
+        )
+    }
+}
+
+impl RecentEnumerationSource for RecentFixtureSource {
+    fn open(&self, _deadline: Instant) -> RecentEnumerationFuture<Result<(), RecentSourceError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn next_batch(
+        &self,
+        batch_size: usize,
+        _include_metadata: bool,
+        deadline: Instant,
+    ) -> RecentEnumerationFuture<Result<Option<Vec<RecentEntryResolution>>, RecentSourceError>>
+    {
+        let request_number = {
+            let mut requests = self.requests.borrow_mut();
+            requests.push(batch_size);
+            requests.len()
+        };
+        if Instant::now() >= deadline {
+            return Box::pin(async { Err(RecentSourceError::TimedOut) });
+        }
+        if self.pending_after_first_batch && request_number > 1 {
+            return Box::pin(std::future::pending());
+        }
+        let entries = {
+            let mut remaining = self.entries.borrow_mut();
+            (0..batch_size)
+                .filter_map(|_| remaining.pop_front())
+                .collect::<Vec<_>>()
+        };
+        let batch = (!entries.is_empty()).then_some(entries);
+        Box::pin(async move { Ok(batch) })
+    }
+}
+
+fn recent_fixture_entry(name: &str) -> FileEntry {
+    let info = gio::FileInfo::new();
+    info.set_name(name);
+    info.set_display_name(name);
+    info.set_file_type(gio::FileType::Regular);
+    let mut entry = entry_from_info(Location::local(format!("/fixture/{name}")), info);
+    entry.recent_unix_seconds = MetadataValue::Known(42);
+    entry
 }
 
 /// `enumerate()` spawns its work on `glib::MainContext::default()` internally (not whatever
@@ -459,6 +541,17 @@ fn unique_fixture_root(label: &str) -> std::path::PathBuf {
 /// threads panic with a GLib thread-affinity error, same as concurrent `spawn_local`/`iteration()`
 /// would.
 fn run_enumerate(request: DirectoryRequest) -> Vec<DirectoryEvent> {
+    run_events(|emit| LocalFileSource.enumerate(request, emit))
+}
+
+fn run_recent_enumerate(
+    request: DirectoryRequest,
+    source: Box<dyn RecentEnumerationSource>,
+) -> Vec<DirectoryEvent> {
+    run_events(|emit| enumerate_recent_with_source(request, emit, Instant::now(), source))
+}
+
+fn run_events(start: impl FnOnce(Rc<dyn Fn(DirectoryEvent)>) -> LoadHandle) -> Vec<DirectoryEvent> {
     let _serial = ASYNC_MAIN_CONTEXT_DEFAULT
         .lock()
         .expect("the async test lock should not be poisoned");
@@ -477,7 +570,7 @@ fn run_enumerate(request: DirectoryRequest) -> Vec<DirectoryEvent> {
                 waker.wake();
             }
         });
-        let handle = LocalFileSource.enumerate(request, emit);
+        let handle = start(emit);
         std::future::poll_fn(|cx| {
             let has_terminal_event = events.borrow().iter().any(|event| {
                 matches!(
@@ -538,6 +631,185 @@ fn finished_can_delete(events: &[DirectoryEvent]) -> Option<Option<bool>> {
         DirectoryEvent::Finished { can_delete, .. } => Some(*can_delete),
         _ => None,
     })
+}
+
+fn recent_resolution(name: &str) -> RecentEntryResolution {
+    RecentEntryResolution::Entry(Box::new(recent_fixture_entry(name)))
+}
+
+#[test]
+fn recent_enumeration_publishes_valid_targets_and_skips_stale_entries() {
+    let (source, requests) = RecentFixtureSource::new(
+        vec![
+            recent_resolution("valid-one"),
+            RecentEntryResolution::Stale,
+            recent_resolution("valid-two"),
+        ],
+        false,
+    );
+    let events = run_recent_enumerate(
+        DirectoryRequest {
+            id: RequestId(1),
+            location: Location::uri("recent:///"),
+            batch_size: 2,
+            include_metadata: true,
+            max_entries: 10,
+            time_budget: Duration::from_secs(10),
+        },
+        Box::new(source),
+    );
+
+    assert_eq!(
+        batched_entries(&events)
+            .iter()
+            .map(|entry| entry.native_name.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        ["valid-one", "valid-two"]
+    );
+    assert_eq!(finished_truncated(&events), Some(false));
+    assert_eq!(finished_can_trash(&events), Some(None));
+    assert_eq!(finished_can_delete(&events), Some(None));
+    assert_eq!(&*requests.borrow(), &[2, 2, 2]);
+}
+
+#[test]
+fn recent_enumeration_finishes_normally_when_empty() {
+    let (source, _) = RecentFixtureSource::new(Vec::new(), false);
+    let events = run_recent_enumerate(
+        DirectoryRequest {
+            id: RequestId(1),
+            location: Location::uri("recent:///"),
+            batch_size: 2,
+            include_metadata: false,
+            max_entries: 10,
+            time_budget: Duration::from_secs(10),
+        },
+        Box::new(source),
+    );
+
+    assert!(batched_entries(&events).is_empty());
+    assert_eq!(finished_truncated(&events), Some(false));
+    assert_eq!(finished_can_trash(&events), Some(None));
+    assert_eq!(finished_can_delete(&events), Some(None));
+}
+
+#[test]
+fn recent_enumeration_respects_the_request_batch_size() {
+    let (source, requests) = RecentFixtureSource::new(
+        (0..5)
+            .map(|index| recent_resolution(&format!("entry-{index}")))
+            .collect(),
+        false,
+    );
+    let events = run_recent_enumerate(
+        DirectoryRequest {
+            id: RequestId(1),
+            location: Location::uri("recent:///"),
+            batch_size: 2,
+            include_metadata: false,
+            max_entries: 10,
+            time_budget: Duration::from_secs(10),
+        },
+        Box::new(source),
+    );
+
+    let batch_sizes = events
+        .iter()
+        .filter_map(|event| match event {
+            DirectoryEvent::Batch { entries, .. } => Some(entries.len()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(batch_sizes, [2, 2, 1]);
+    assert!(requests.borrow().iter().all(|size| *size == 2));
+}
+
+#[test]
+fn recent_enumeration_respects_max_entries_and_reports_truncation() {
+    let (source, _) = RecentFixtureSource::new(
+        (0..5)
+            .map(|index| recent_resolution(&format!("entry-{index}")))
+            .collect(),
+        false,
+    );
+    let events = run_recent_enumerate(
+        DirectoryRequest {
+            id: RequestId(1),
+            location: Location::uri("recent:///"),
+            batch_size: 2,
+            include_metadata: false,
+            max_entries: 3,
+            time_budget: Duration::from_secs(10),
+        },
+        Box::new(source),
+    );
+
+    assert_eq!(batched_entry_count(&events), 3);
+    assert_eq!(finished_truncated(&events), Some(true));
+}
+
+#[test]
+fn recent_enumeration_honors_a_zero_time_budget() {
+    let events = run_enumerate(DirectoryRequest {
+        id: RequestId(1),
+        location: Location::uri("recent:///"),
+        batch_size: 2,
+        include_metadata: false,
+        max_entries: 10,
+        time_budget: Duration::ZERO,
+    });
+
+    assert!(batched_entries(&events).is_empty());
+    assert_eq!(finished_truncated(&events), Some(true));
+    assert_eq!(finished_can_trash(&events), Some(None));
+    assert_eq!(finished_can_delete(&events), Some(None));
+}
+
+#[test]
+fn cancelling_recent_enumeration_stops_further_publication() {
+    let _serial = ASYNC_MAIN_CONTEXT_DEFAULT
+        .lock()
+        .expect("the async test lock should not be poisoned");
+    let (source, _) = RecentFixtureSource::new(vec![recent_resolution("first")], true);
+    let events: Rc<RefCell<Vec<DirectoryEvent>>> = Rc::new(RefCell::new(Vec::new()));
+    let collected = events.clone();
+    let handle = enumerate_recent_with_source(
+        DirectoryRequest {
+            id: RequestId(1),
+            location: Location::uri("recent:///"),
+            batch_size: 1,
+            include_metadata: false,
+            max_entries: 10,
+            time_budget: Duration::from_secs(10),
+        },
+        Rc::new(move |event| collected.borrow_mut().push(event)),
+        Instant::now(),
+        Box::new(source),
+    );
+    let context = glib::MainContext::default();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !events
+        .borrow()
+        .iter()
+        .any(|event| matches!(event, DirectoryEvent::Batch { .. }))
+        && Instant::now() < deadline
+    {
+        context.iteration(true);
+    }
+
+    assert_eq!(batched_entry_count(&events.borrow()), 1);
+    drop(handle);
+    for _ in 0..3 {
+        while context.iteration(false) {}
+    }
+
+    assert_eq!(batched_entry_count(&events.borrow()), 1);
+    assert!(
+        !events
+            .borrow()
+            .iter()
+            .any(|event| matches!(event, DirectoryEvent::Finished { .. }))
+    );
 }
 
 #[test]

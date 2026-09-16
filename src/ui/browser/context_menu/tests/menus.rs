@@ -46,6 +46,7 @@ impl FileSource for MenuSource {
                 } else {
                     0o644
                 }),
+                recent_unix_seconds: MetadataValue::Unknown,
                 is_hidden: false,
                 image_dimensions: MetadataValue::Unknown,
                 child_count: MetadataValue::Unknown,

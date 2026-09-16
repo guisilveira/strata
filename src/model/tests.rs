@@ -64,6 +64,16 @@ fn uri_locations_remain_explicit_and_have_one_breadcrumb() {
 }
 
 #[test]
+fn recent_root_is_named_and_has_no_product_parent() {
+    let recent = Location::uri("recent:///");
+
+    assert!(recent.is_recent_root());
+    assert_eq!(recent.display_name(), "Recent");
+    assert_eq!(recent.parent(), None);
+    assert_eq!(recent.breadcrumbs(), vec![recent.clone()]);
+}
+
+#[test]
 fn uri_display_names_are_percent_decoded() {
     assert_eq!(
         Location::uri("smb://server/share/My%20Share").display_name(),
