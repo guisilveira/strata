@@ -85,6 +85,15 @@ pub(super) fn launch(
     files: &[gio::File],
     context: Option<&impl IsA<gio::AppLaunchContext>>,
 ) -> Result<(), glib::Error> {
+    launch_with_recent_registration(app, files, context, register_recent_file)
+}
+
+fn launch_with_recent_registration(
+    app: &gio::AppInfo,
+    files: &[gio::File],
+    context: Option<&impl IsA<gio::AppLaunchContext>>,
+    register_recent: impl Fn(&gio::File) -> bool,
+) -> Result<(), glib::Error> {
     // GIO drops files without a local path when expanding %f/%F.
     if !app.supports_uris() && requires_uri_handlers(files) {
         return Err(glib::Error::new(
@@ -92,7 +101,28 @@ pub(super) fn launch(
             "This application cannot open files at this location",
         ));
     }
-    app.launch(files, context)
+    app.launch(files, context)?;
+    for file in files {
+        if !file.has_uri_scheme("recent")
+            && !matches!(
+                file.query_file_type(gio::FileQueryInfoFlags::NONE, None::<&gio::Cancellable>),
+                gio::FileType::Directory | gio::FileType::Mountable
+            )
+        {
+            register_recent(file);
+        }
+    }
+    Ok(())
+}
+
+fn register_recent_file(file: &gio::File) -> bool {
+    let manager = gtk::RecentManager::default();
+    let uri = file.uri();
+    let added = manager.add_item(uri.as_str());
+    if !added {
+        tracing::debug!(uri = %uri, "unable to record file in Recent history");
+    }
+    added
 }
 
 fn application_icon(app: &gio::AppInfo, display: &gtk::gdk::Display) -> gtk::Image {

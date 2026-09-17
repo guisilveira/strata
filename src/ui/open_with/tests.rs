@@ -36,6 +36,119 @@ fn mounted_non_native_file_with_path() -> Option<gio::File> {
         .find(|file| !file.is_native() && file.path().is_some())
 }
 
+#[test]
+fn successful_launch_registers_each_file_uri_after_launch() {
+    let files = [
+        gio::File::for_path("/tmp/ticket-05-first.txt"),
+        gio::File::for_path("/tmp/ticket-05-second.txt"),
+    ];
+    let registered = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let registered_state = registered.clone();
+    let app = path_only_app();
+
+    let result = launch_with_recent_registration(
+        &app,
+        &files,
+        None::<&gio::AppLaunchContext>,
+        move |file| {
+            registered_state.borrow_mut().push(file.uri().to_string());
+            true
+        },
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(
+        *registered.borrow(),
+        files
+            .iter()
+            .map(|file| file.uri().to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn failed_application_launch_does_not_register_recent_files() {
+    let files = [gio::File::for_path("/tmp/ticket-05-failed.txt")];
+    let registered = Rc::new(Cell::new(false));
+    let registration_state = registered.clone();
+    let app = gio::AppInfo::create_from_commandline(
+        "/definitely/not-a-real-strata-launcher %F",
+        Some("Failing application"),
+        gio::AppInfoCreateFlags::NONE,
+    )
+    .expect("application");
+    let result =
+        launch_with_recent_registration(&app, &files, None::<&gio::AppLaunchContext>, move |_| {
+            registration_state.set(true);
+            false
+        });
+
+    assert!(result.is_err());
+    assert!(!registered.get());
+}
+
+#[test]
+fn recent_registration_failure_does_not_fail_successful_launch() {
+    let files = [gio::File::for_path(
+        "/tmp/ticket-05-registration-failure.txt",
+    )];
+    let registered = Rc::new(Cell::new(false));
+    let registration_state = registered.clone();
+    let app = path_only_app();
+    let result =
+        launch_with_recent_registration(&app, &files, None::<&gio::AppLaunchContext>, move |_| {
+            registration_state.set(true);
+            false
+        });
+
+    assert!(result.is_ok());
+    assert!(registered.get());
+}
+
+#[test]
+fn successful_open_with_does_not_register_a_directory() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let target_path = fixture.path().join("target.txt");
+    std::fs::write(&target_path, "target").expect("target");
+    let directory = gio::File::for_path(fixture.path());
+    let target = gio::File::for_path(&target_path);
+    let files = [directory, target.clone()];
+    let registered = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let registered_state = registered.clone();
+    let app = path_only_app();
+
+    launch_with_recent_registration(&app, &files, None::<&gio::AppLaunchContext>, move |file| {
+        registered_state.borrow_mut().push(file.uri().to_string());
+        true
+    })
+    .expect("Open With launch");
+
+    assert_eq!(*registered.borrow(), vec![target.uri().to_string()]);
+}
+
+#[test]
+fn recent_open_registers_the_target_uri_instead_of_the_collection_uri() {
+    let target = gio::File::for_path("/tmp/ticket-05-real-target.txt");
+    let recent_entry = gio::File::for_uri("recent:///ticket-05-entry");
+    let files = [recent_entry, target.clone()];
+    let registered = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let registered_state = registered.clone();
+    let app = gio::AppInfo::create_from_commandline(
+        "/bin/true %U",
+        Some("URI handler"),
+        gio::AppInfoCreateFlags::SUPPORTS_URIS,
+    )
+    .expect("application");
+
+    launch_with_recent_registration(&app, &files, None::<&gio::AppLaunchContext>, move |file| {
+        registered_state.borrow_mut().push(file.uri().to_string());
+        true
+    })
+    .expect("Open With launch");
+
+    assert_eq!(*registered.borrow(), vec![target.uri().to_string()]);
+}
+
 fn assert_requires_uri_handlers(file: &gio::File) {
     assert!(!file.is_native());
     assert!(
@@ -103,10 +216,12 @@ fn fuse_backed_non_native_files_allow_path_handlers() {
     let trash = gio::File::for_uri("trash:///notes.txt");
     assert!(requires_uri_handlers(&[fuse.clone(), trash]));
 
-    launch(
-        &path_only_app(),
+    let app = path_only_app();
+    launch_with_recent_registration(
+        &app,
         std::slice::from_ref(&fuse),
         None::<&gio::AppLaunchContext>,
+        |_| true,
     )
     .expect("FUSE path launch");
 }
@@ -129,10 +244,12 @@ fn path_only_launch_rejects_files_without_a_local_path() {
 #[test]
 fn path_only_launch_allows_files_with_a_local_path() {
     let local = gio::File::for_path("/tmp/local.txt");
-    launch(
-        &path_only_app(),
+    let app = path_only_app();
+    launch_with_recent_registration(
+        &app,
         std::slice::from_ref(&local),
         None::<&gio::AppLaunchContext>,
+        |_| true,
     )
     .expect("path launch");
 }
@@ -163,7 +280,8 @@ fn uri_capable_launch_preserves_every_remote_argument() {
         gio::File::for_uri("trash:///alpha%20file.txt"),
         gio::File::for_uri("sftp://example.invalid/beta.txt"),
     ];
-    launch(&app, &files, None::<&gio::AppLaunchContext>).expect("URI launch");
+    launch_with_recent_registration(&app, &files, None::<&gio::AppLaunchContext>, |_| true)
+        .expect("URI launch");
     let deadline = Instant::now() + Duration::from_secs(3);
     let received = loop {
         if let Ok(contents) = std::fs::read_to_string(&output) {
