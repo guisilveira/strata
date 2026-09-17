@@ -18,6 +18,7 @@ use crate::{
     services::MediaPreviewSize,
 };
 
+mod appimage;
 mod document_media;
 mod media;
 
@@ -43,6 +44,14 @@ pub(crate) fn run(arguments: &[String]) -> Result<(), String> {
     if operation == "preview-media" {
         return media::run(input, output, value, media_backend, start_tick);
     }
+    if operation == "preview-workbook" {
+        let table = crate::services::table::read_workbook(input)?;
+        let bytes = serde_json::to_vec(&table).map_err(|e| e.to_string())?;
+        if bytes.len() as u64 > MAX_OUTPUT_BYTES {
+            return Err("Table output budget exceeded".into());
+        }
+        return fs::write(output, bytes).map_err(|e| e.to_string());
+    }
     if operation == "media-metadata" {
         return write_media_metadata(input, output);
     }
@@ -62,6 +71,10 @@ pub(crate) fn run(arguments: &[String]) -> Result<(), String> {
             None,
         ),
         "thumbnail-video" => (render_media(input, numeric_value()?.clamp(16, 256))?, None),
+        "thumbnail-appimage" => (
+            appimage::render(input, numeric_value()?.clamp(16, 256))?,
+            None,
+        ),
         "preview-image" => (render_raw(input, 800)?, None),
         "document-image" => (document_media::image(input)?, None),
         "document-mermaid" => (document_media::mermaid(input)?, None),

@@ -112,7 +112,17 @@ fn quick_preview_is_offered_only_for_supported_files() {
         "notes.txt",
         crate::model::EntryKind::FileSymbolicLink,
     )));
-    for name in ["notes.mdown", "notes.mkdn", "notes.mdwn", "page.xhtml"] {
+    for name in [
+        "notes.mdown",
+        "notes.mkdn",
+        "notes.mdwn",
+        "page.xhtml",
+        "data.csv",
+        "data.tsv",
+        "book.xls",
+        "book.xlsx",
+        "book.ods",
+    ] {
         assert!(
             crate::ui::preview::entry_supports_quick_preview(&entry(
                 name,

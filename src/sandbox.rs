@@ -97,11 +97,13 @@ pub(crate) enum ParseOperation {
     ThumbnailRaw,
     ThumbnailPdf,
     ThumbnailVideo,
+    ThumbnailAppImage,
     PreviewImage,
     DocumentImage,
     DocumentMermaid,
     DocumentMath { display: bool },
     MediaMetadata,
+    PreviewWorkbook,
     PreviewPdf(PdfRenderSize),
     PreviewMedia(MediaPreviewSize),
 }
@@ -113,12 +115,14 @@ impl ParseOperation {
             Self::ThumbnailRaw => "thumbnail-raw",
             Self::ThumbnailPdf => "thumbnail-pdf",
             Self::ThumbnailVideo => "thumbnail-video",
+            Self::ThumbnailAppImage => "thumbnail-appimage",
             Self::PreviewImage => "preview-image",
             Self::DocumentImage => "document-image",
             Self::DocumentMermaid => "document-mermaid",
             Self::DocumentMath { display: true } => "document-math",
             Self::DocumentMath { display: false } => "document-inline-math",
             Self::MediaMetadata => "media-metadata",
+            Self::PreviewWorkbook => "preview-workbook",
             Self::PreviewPdf(_) => "preview-pdf",
             Self::PreviewMedia(_) => "preview-media",
         }
@@ -129,7 +133,7 @@ impl ParseOperation {
     }
 
     fn output_name(self) -> &'static str {
-        if self == Self::MediaMetadata {
+        if matches!(self, Self::MediaMetadata | Self::PreviewWorkbook) {
             "result.json"
         } else if self.is_media() {
             "result.media"
@@ -143,13 +147,14 @@ impl ParseOperation {
             Self::ThumbnailImage
             | Self::ThumbnailRaw
             | Self::ThumbnailPdf
-            | Self::ThumbnailVideo => Some((256, 256, 256 * 256)),
+            | Self::ThumbnailVideo
+            | Self::ThumbnailAppImage => Some((256, 256, 256 * 256)),
             Self::PreviewImage
             | Self::DocumentImage
             | Self::DocumentMermaid
             | Self::DocumentMath { .. } => Some((800, 800, 800 * 800)),
             Self::PreviewPdf(size) => Some(size.image_limits()),
-            Self::PreviewMedia(_) | Self::MediaMetadata => None,
+            Self::PreviewMedia(_) | Self::MediaMetadata | Self::PreviewWorkbook => None,
         }
     }
 
@@ -160,6 +165,7 @@ impl ParseOperation {
             | Self::ThumbnailPdf
             | Self::PreviewImage
             | Self::PreviewPdf(_) => Some(MAX_RASTER_INPUT_BYTES),
+            Self::PreviewWorkbook => Some(crate::services::table::WORKBOOK_BYTE_LIMIT),
             Self::DocumentImage => Some(crate::services::document_media::IMAGE_INPUT_LIMIT),
             Self::DocumentMermaid => {
                 Some(crate::services::document_media::DIAGRAM_INPUT_LIMIT as u64)
@@ -167,7 +173,10 @@ impl ParseOperation {
             Self::DocumentMath { .. } => {
                 Some(crate::services::document_media::MATH_INPUT_LIMIT as u64)
             }
-            Self::ThumbnailVideo | Self::PreviewMedia(_) | Self::MediaMetadata => None,
+            Self::ThumbnailVideo
+            | Self::ThumbnailAppImage
+            | Self::PreviewMedia(_)
+            | Self::MediaMetadata => None,
         }
     }
 }
@@ -563,6 +572,9 @@ pub(crate) fn numbered_name(name: &std::ffi::OsStr, prefix: &str) -> bool {
 }
 
 fn valid_output(operation: ParseOperation, data: &[u8]) -> bool {
+    if operation == ParseOperation::PreviewWorkbook {
+        return crate::services::table::TableData::from_json(data).is_ok();
+    }
     if operation == ParseOperation::MediaMetadata {
         data.len() as u64 <= metadata::MAX_METADATA_BYTES
             && serde_json::from_slice::<serde_json::Value>(data).is_ok()

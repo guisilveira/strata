@@ -300,7 +300,7 @@ fn dropping_a_queued_pdf_render_removes_it_without_consuming_a_slot() {
 }
 
 #[test]
-fn cancelled_in_flight_pdf_renders_keep_the_permit_and_emit_no_stale_events() {
+fn cancelled_in_flight_document_renders_keep_the_permit_and_emit_no_stale_events() {
     use crate::{
         model::{EntryKind, FileEntry, Location, MetadataValue},
         services::PreviewRequestId,
@@ -313,7 +313,12 @@ fn cancelled_in_flight_pdf_renders_keep_the_permit_and_emit_no_stale_events() {
     let _owner = context.acquire().expect("main context owner");
     let provider = LocalPreviewProvider::new(Rc::new(|| MediaPreviewBackend::Software));
 
-    for succeeds in [false, true] {
+    for (filename, succeeds) in [
+        ("cancelled.pdf", false),
+        ("cancelled.pdf", true),
+        ("cancelled.xlsx", false),
+        ("cancelled.xlsx", true),
+    ] {
         let events = Rc::new(RefCell::new(Vec::new()));
         let events_for_emit = events.clone();
         let (started, receive_started) = oneshot::channel();
@@ -322,10 +327,10 @@ fn cancelled_in_flight_pdf_renders_keep_the_permit_and_emit_no_stale_events() {
             PreviewRequest {
                 id: PreviewRequestId(1),
                 entry: FileEntry {
-                    location: Location::local("cancelled.pdf"),
+                    location: Location::local(filename),
                     thumbnail_path: None,
-                    native_name: "cancelled.pdf".into(),
-                    display_name: "cancelled.pdf".into(),
+                    native_name: filename.into(),
+                    display_name: filename.into(),
                     kind: EntryKind::File,
                     size: MetadataValue::Unknown,
                     modified_unix_seconds: MetadataValue::Unknown,
@@ -350,7 +355,7 @@ fn cancelled_in_flight_pdf_renders_keep_the_permit_and_emit_no_stale_events() {
                 assert!(cancellation.is_cancelled());
                 if succeeds {
                     Ok(crate::sandbox::ParseOutput {
-                        data: vec![1, 2, 3],
+                        data: br#"{"rows":[["a"],["1"]],"truncated":false}"#.to_vec(),
                         page: 1,
                         pages: 2,
                     })
