@@ -252,6 +252,47 @@ fn coalescing_preserves_a_move_when_metadata_follows_it() {
 }
 
 #[test]
+fn recent_monitor_events_rescan_without_querying_virtual_children() {
+    let watched = Location::uri("recent:///");
+    let child = Location::uri("recent:///virtual-child");
+    let events = [
+        gio::FileMonitorEvent::Created,
+        gio::FileMonitorEvent::Changed,
+        gio::FileMonitorEvent::Deleted,
+        gio::FileMonitorEvent::Moved,
+        gio::FileMonitorEvent::Renamed,
+        gio::FileMonitorEvent::AttributeChanged,
+        gio::FileMonitorEvent::ChangesDoneHint,
+        gio::FileMonitorEvent::PreUnmount,
+        gio::FileMonitorEvent::Unmounted,
+    ];
+
+    let mut pending = HashMap::new();
+    for (index, event) in events.into_iter().enumerate() {
+        let change = pending_monitor_change(
+            &watched,
+            Some(child.clone()),
+            Some(Location::uri(format!("recent:///other-{index}"))),
+            event,
+        )
+        .expect("Recent monitor activity should invalidate the collection");
+        assert!(matches!(change, PendingMonitorChange::Rescan));
+        assert_eq!(queue_monitor_change(&mut pending, None, change), index == 0);
+    }
+
+    let notified: Rc<RefCell<Vec<DirectoryChange>>> = Rc::new(RefCell::new(Vec::new()));
+    let collected = notified.clone();
+    let notify: Rc<dyn Fn(DirectoryChange)> =
+        Rc::new(move |change| collected.borrow_mut().push(change));
+    flush_monitor_changes(&RefCell::new(pending), &notify, &Rc::new(Cell::new(false)));
+
+    assert!(matches!(
+        notified.borrow().as_slice(),
+        [DirectoryChange::Rescan]
+    ));
+}
+
+#[test]
 fn metadata_update_followed_by_move_preserves_source_removal() {
     let mut pending = HashMap::new();
     let temp = Location::local("/fixture/file.tmp");
@@ -444,18 +485,24 @@ fn watching_a_uri_location_reports_created_entries() {
 }
 
 #[test]
-fn watching_recent_root_is_disabled() {
-    let changes: Rc<RefCell<Vec<DirectoryChange>>> = Rc::new(RefCell::new(Vec::new()));
-    let collected = changes.clone();
-
-    let handle = LocalFileSource.watch(
-        Location::uri("recent:///"),
-        false,
-        Rc::new(move |change| collected.borrow_mut().push(change)),
+fn recent_watch_uses_gio_monitoring_when_supported() {
+    let recent = Location::uri("recent:///");
+    let probe = gio_file_for_location(&recent).monitor_directory(
+        gio::FileMonitorFlags::WATCH_MOVES,
+        None::<&gio::Cancellable>,
     );
+    let supported = match probe {
+        Ok(monitor) => {
+            let _ = monitor.cancel();
+            true
+        }
+        Err(_) => false,
+    };
+    let handle = LocalFileSource.watch(recent, false, Rc::new(|_: DirectoryChange| {}));
 
-    assert!(handle.is_none());
-    assert!(changes.borrow().is_empty());
+    if supported {
+        assert!(handle.is_some());
+    }
 }
 
 fn unique_fixture_root(label: &str) -> std::path::PathBuf {

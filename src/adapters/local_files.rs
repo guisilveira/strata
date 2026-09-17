@@ -1249,9 +1249,6 @@ impl FileSource for LocalFileSource {
         notify: Rc<dyn Fn(DirectoryChange)>,
     ) -> Option<LoadHandle> {
         let _ = include_hidden;
-        if location.is_recent_root() {
-            return None;
-        }
         let file = gio_file_for_location(&location);
         let monitor = match file.monitor_directory(
             gio::FileMonitorFlags::WATCH_MOVES,
@@ -1287,33 +1284,12 @@ impl FileSource for LocalFileSource {
             if pending_for_change.borrow().contains_key(&None) {
                 return;
             }
-            let changed = monitored_change_target(&watched, location_for_file(file), event);
-            let other = other_file.and_then(location_for_file);
-            let change = match event {
-                gio::FileMonitorEvent::Deleted | gio::FileMonitorEvent::MovedOut => {
-                    changed.map(PendingMonitorChange::Remove)
-                }
-                gio::FileMonitorEvent::Created | gio::FileMonitorEvent::MovedIn => {
-                    changed.map(PendingMonitorChange::Upsert)
-                }
-                gio::FileMonitorEvent::Changed
-                | gio::FileMonitorEvent::ChangesDoneHint
-                | gio::FileMonitorEvent::AttributeChanged => {
-                    changed.map(PendingMonitorChange::Upsert)
-                }
-                gio::FileMonitorEvent::Moved | gio::FileMonitorEvent::Renamed => changed
-                    .zip(other)
-                    .map(|(from, to)| PendingMonitorChange::Move { from, to }),
-                gio::FileMonitorEvent::PreUnmount | gio::FileMonitorEvent::Unmounted => {
-                    Some(PendingMonitorChange::Rescan)
-                }
-                _ => Some(PendingMonitorChange::Rescan),
-            };
-            let change = if watched.is_camera_photo_root() {
-                Some(PendingMonitorChange::Rescan)
-            } else {
-                change
-            };
+            let change = pending_monitor_change(
+                &watched,
+                location_for_file(file),
+                other_file.and_then(location_for_file),
+                event,
+            );
             let Some(change) = change else {
                 return;
             };
@@ -1733,6 +1709,42 @@ fn log_directory_load_started(request_id: RequestId, location: &Location) {
 }
 
 // GVfs can report content changes against the watched directory itself; keep only departures.
+fn pending_monitor_change(
+    watched: &Location,
+    changed: Option<Location>,
+    other: Option<Location>,
+    event: gio::FileMonitorEvent,
+) -> Option<PendingMonitorChange> {
+    if watched.is_recent_root() {
+        return Some(PendingMonitorChange::Rescan);
+    }
+
+    let changed = monitored_change_target(watched, changed, event);
+    let change = match event {
+        gio::FileMonitorEvent::Deleted | gio::FileMonitorEvent::MovedOut => {
+            changed.map(PendingMonitorChange::Remove)
+        }
+        gio::FileMonitorEvent::Created | gio::FileMonitorEvent::MovedIn => {
+            changed.map(PendingMonitorChange::Upsert)
+        }
+        gio::FileMonitorEvent::Changed
+        | gio::FileMonitorEvent::ChangesDoneHint
+        | gio::FileMonitorEvent::AttributeChanged => changed.map(PendingMonitorChange::Upsert),
+        gio::FileMonitorEvent::Moved | gio::FileMonitorEvent::Renamed => changed
+            .zip(other)
+            .map(|(from, to)| PendingMonitorChange::Move { from, to }),
+        gio::FileMonitorEvent::PreUnmount | gio::FileMonitorEvent::Unmounted => {
+            Some(PendingMonitorChange::Rescan)
+        }
+        _ => Some(PendingMonitorChange::Rescan),
+    };
+    if watched.is_camera_photo_root() {
+        Some(PendingMonitorChange::Rescan)
+    } else {
+        change
+    }
+}
+
 fn monitored_change_target(
     watched: &Location,
     changed: Option<Location>,

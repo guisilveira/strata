@@ -14,6 +14,41 @@ fn recent_entry(name: &str, kind: EntryKind, recent: i64, modified: i64) -> File
     }
 }
 
+struct ReloadingRecentSource {
+    entries: Rc<RefCell<Vec<FileEntry>>>,
+    notify: Rc<RefCell<Option<WatchCallback>>>,
+}
+
+impl FileSource for ReloadingRecentSource {
+    fn validate_location(&self, _location: &Location) -> Result<(), LocationValidationError> {
+        Ok(())
+    }
+
+    fn enumerate(&self, request: DirectoryRequest, emit: Rc<dyn Fn(DirectoryEvent)>) -> LoadHandle {
+        emit(DirectoryEvent::Batch {
+            request_id: request.id,
+            entries: self.entries.borrow().clone(),
+        });
+        emit(DirectoryEvent::Finished {
+            request_id: request.id,
+            truncated: false,
+            can_trash: None,
+            can_delete: None,
+        });
+        LoadHandle::new(|| {})
+    }
+
+    fn watch(
+        &self,
+        _location: Location,
+        _include_hidden: bool,
+        notify: Rc<dyn Fn(DirectoryChange)>,
+    ) -> Option<LoadHandle> {
+        self.notify.replace(Some(notify));
+        Some(LoadHandle::new(|| {}))
+    }
+}
+
 fn load_recent(
     entries: Vec<FileEntry>,
 ) -> (Rc<Browser>, Rc<RefCell<Vec<BrowserEvent>>>, CapturedLoad) {
@@ -40,6 +75,69 @@ fn load_recent(
     browser.flush_coalesced_capped(None);
 
     (browser, events, captured)
+}
+
+#[test]
+fn recent_monitor_rescan_reloads_targets_and_preserves_local_sort() {
+    let _serial = crate::test_support::ASYNC_MAIN_CONTEXT_DEFAULT
+        .lock()
+        .expect("the async test lock should not be poisoned");
+    let recent = Location::uri("recent:///");
+    let entries = Rc::new(RefCell::new(vec![
+        recent_entry("a", EntryKind::File, 20, 1),
+        recent_entry("b", EntryKind::File, 10, 2),
+    ]));
+    let notify = Rc::new(RefCell::new(None::<WatchCallback>));
+    let browser = Browser::new(Rc::new(ReloadingRecentSource {
+        entries: entries.clone(),
+        notify: notify.clone(),
+    }));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let observed = events.clone();
+    browser.observe(move |event| observed.borrow_mut().push(event.clone()));
+
+    browser.navigate(recent.clone());
+    browser.set_sort(0, SortKey::Name, SortDirection::Ascending);
+    pump_until(|| {
+        browser.column_preferences(0).is_some_and(|preferences| {
+            preferences.sort_key == SortKey::Name
+                && preferences.sort_direction == SortDirection::Ascending
+        })
+    });
+    events.borrow_mut().clear();
+
+    entries.replace(vec![
+        recent_entry("b", EntryKind::File, 10, 2),
+        recent_entry("c", EntryKind::File, 30, 3),
+    ]);
+    notify
+        .borrow()
+        .clone()
+        .expect("Recent monitor should be installed")(DirectoryChange::Rescan);
+
+    assert_eq!(browser.location_at(0), Some(recent));
+    assert_eq!(column_names(&browser, 0), ["b", "c"]);
+    assert_eq!(
+        browser
+            .entry_at(0, 0)
+            .expect("reloaded Recent entry")
+            .location,
+        Location::local("/fixture/b")
+    );
+    assert_eq!(
+        browser.column_preferences(0).map(|preferences| (
+            preferences.sort_key,
+            preferences.sort_direction,
+            preferences.folders_first,
+        )),
+        Some((SortKey::Name, SortDirection::Ascending, false))
+    );
+    assert!(
+        events
+            .borrow()
+            .iter()
+            .any(|event| matches!(event, BrowserEvent::ColumnReloaded { depth: 0 }))
+    );
 }
 
 #[test]

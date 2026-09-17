@@ -30,13 +30,13 @@ impl FileSource for RecentMonitorSource {
 }
 
 #[test]
-fn recent_navigation_does_not_install_a_monitor_for_virtual_children() {
+fn recent_navigation_keeps_the_normal_monitor_lifecycle() {
     let browser = Browser::new(Rc::new(RecentMonitorSource));
 
     browser.navigate(Location::uri("recent:///"));
 
     assert_eq!(browser.monitors.borrow().len(), 1);
-    assert!(browser.monitors.borrow()[0].is_none());
+    assert_eq!(browser.location_at(0), Some(Location::uri("recent:///")));
     assert_eq!(browser.column_snapshot(0).expect("Recent column").count, 0);
 }
 
