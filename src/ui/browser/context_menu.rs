@@ -286,7 +286,9 @@ pub(in crate::ui) fn install_folder_context_menu(
     content.append(&select_all);
     content.append(&refresh);
     content.append(&toggle_hidden);
-    content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    if customize.get_visible() || properties.get_visible() {
+        content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    }
     content.append(&customize);
     content.append(&properties);
 

@@ -302,6 +302,34 @@ fn assert_actions(popover: &gtk::Popover, present: &[&str], absent: &[&str]) {
     }
 }
 
+/// A separator must divide two groups of actions. When every action below the
+/// last separator is hidden the menu renders a rule with nothing under it, so
+/// assert on what is actually rendered rather than on what was appended.
+fn assert_separators_divide_actions(popover: &gtk::Popover) {
+    let rendered: Vec<bool> = descendants(&popover.clone().upcast::<gtk::Widget>())
+        .into_iter()
+        .filter(|widget| widget.is_mapped())
+        .filter_map(|widget| {
+            if widget.downcast_ref::<gtk::Separator>().is_some() {
+                Some(true)
+            } else if widget.downcast_ref::<gtk::Label>().is_some() {
+                Some(false)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_ne!(
+        rendered.last(),
+        Some(&true),
+        "menu ends with a separator and no following action"
+    );
+    assert!(
+        !rendered.windows(2).any(|pair| pair == [true, true]),
+        "menu renders two separators with no action between them"
+    );
+}
+
 fn capture_menu(menu: &gtk::Popover, name: &str) {
     let Some(output) = std::env::var_os("STRATA_TRASH_MENU_VISUALS") else {
         return;
@@ -561,6 +589,7 @@ fn recent_background_menu_rejects_physical_directory_actions() {
                         "Properties",
                     ],
                 );
+                assert_separators_divide_actions(&menu);
                 menu.popdown();
                 wait_until(|| menu.parent().is_none());
 
