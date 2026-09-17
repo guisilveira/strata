@@ -113,6 +113,12 @@ fn paste_prefers_only_a_single_selected_directory() {
             None
         );
     }
+    for load_cursor in [false, true] {
+        assert_eq!(
+            paste_destination(&[], Some(Location::uri("recent:///")), load_cursor),
+            None
+        );
+    }
 }
 
 #[test]

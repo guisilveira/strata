@@ -162,6 +162,11 @@ fn terminal_shortcut_prefers_one_selected_directory() {
 }
 
 #[test]
+fn recent_root_is_not_a_terminal_working_directory() {
+    assert!(!can_open_terminal(&Location::uri("recent:///")));
+}
+
+#[test]
 fn open_location_rejects_trash_locations() {
     crate::test_support::gtk_test(
         "ui::browser::desktop::tests::open_location_rejects_trash_locations",

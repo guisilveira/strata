@@ -3184,7 +3184,10 @@ fn install_mode_directory_drop_target(
     destination: Location,
     transfer_handler: TransferHandlerSlot,
 ) {
-    if transfer_handler.borrow().is_none() || is_trash_location(&destination) {
+    if transfer_handler.borrow().is_none()
+        || is_trash_location(&destination)
+        || destination.is_recent_root()
+    {
         return;
     }
     widget.add_css_class("file-drop-zone");

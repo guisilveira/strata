@@ -238,6 +238,31 @@ fn new_files_and_folders_request_unique_naming_and_report_the_created_location()
 }
 
 #[test]
+fn recent_root_is_rejected_by_creation_and_transfer_commands() {
+    let browser = Browser::new(Rc::new(FakeFileSource));
+    browser.set_operation_provider(Rc::new(ImmediateOperationProvider));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let observed = events.clone();
+    browser.observe(move |event| observed.borrow_mut().push(event.clone()));
+    let recent = Location::uri("recent:///");
+
+    browser.create_new_folder(recent.clone());
+    browser.create_new_file(recent.clone());
+    browser.transfer(
+        recent,
+        vec![PasteItem {
+            source: Location::local("/fixture/source.txt"),
+            conflict: TransferConflict::FailIfExists,
+        }],
+        false,
+        true,
+    );
+
+    assert!(events.borrow().is_empty());
+    assert_eq!(browser.current_operation.get(), None);
+}
+
+#[test]
 fn large_restore_progress_defers_model_removal() {
     let browser = Browser::new(Rc::new(TrashFileSource));
     browser.navigate(Location::uri("trash:///"));

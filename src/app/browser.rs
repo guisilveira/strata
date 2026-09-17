@@ -1476,6 +1476,9 @@ impl Browser {
         name: String,
         unique_name: bool,
     ) {
+        if parent.is_recent_root() {
+            return;
+        }
         if let Err(message) = validate_basename(&name) {
             self.emit(BrowserEvent::OperationFailed {
                 message: message.to_owned(),
@@ -1507,6 +1510,9 @@ impl Browser {
     }
 
     fn create_file_with_naming(self: &Rc<Self>, parent: Location, name: String, unique_name: bool) {
+        if parent.is_recent_root() {
+            return;
+        }
         if let Err(message) = validate_basename(&name) {
             self.emit(BrowserEvent::OperationFailed {
                 message: message.to_owned(),
@@ -1540,7 +1546,7 @@ impl Browser {
         move_sources: bool,
         reveal: bool,
     ) {
-        if items.is_empty() {
+        if items.is_empty() || destination.is_recent_root() {
             return;
         }
         let Some(provider) = self.operation_provider.borrow().clone() else {
