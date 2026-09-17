@@ -74,6 +74,42 @@ fn recent_root_is_named_and_has_no_product_parent() {
 }
 
 #[test]
+fn every_recent_root_spelling_is_treated_as_the_collection_root() {
+    // The location bar accepts the `recent` scheme verbatim, so the root must be
+    // recognized however the user spells it, not only as the canonical URI.
+    for uri in ["recent:///", "recent://", "RECENT:///"] {
+        let location = Location::uri(uri);
+        assert!(location.is_recent_root(), "{uri} should be the Recent root");
+        assert!(
+            location.is_recent_location(),
+            "{uri} should be a Recent URI"
+        );
+        assert_eq!(location.display_name(), "Recent");
+        assert_eq!(location.parent(), None);
+    }
+}
+
+#[test]
+fn a_recent_child_is_a_recent_location_but_never_the_root() {
+    let child = Location::uri("recent:///entry-id");
+
+    assert!(child.is_recent_location());
+    assert!(!child.is_recent_root());
+}
+
+#[test]
+fn non_recent_locations_are_not_mistaken_for_the_collection() {
+    for location in [
+        Location::uri("trash:///"),
+        Location::uri("sftp://host/recent"),
+        Location::local("/home/user/recent"),
+    ] {
+        assert!(!location.is_recent_location());
+        assert!(!location.is_recent_root());
+    }
+}
+
+#[test]
 fn uri_display_names_are_percent_decoded() {
     assert_eq!(
         Location::uri("smb://server/share/My%20Share").display_name(),

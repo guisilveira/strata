@@ -1909,7 +1909,7 @@ impl ViewState {
             });
             let active = destination == Some(depth)
                 && self.browser.location_at(depth).is_some_and(|location| {
-                    !is_trash_location(&location) && !location.is_recent_root()
+                    !is_trash_location(&location) && !location.is_recent_location()
                 });
             if active {
                 column.shell.add_css_class("destination-column");
@@ -1955,7 +1955,7 @@ fn paste_destination(
         [folder] if folder.is_directory() && !load_cursor => Some(folder.location.clone()),
         _ => column,
     }
-    .filter(|location| !is_trash_location(location) && !location.is_recent_root())
+    .filter(|location| !is_trash_location(location) && !location.is_recent_location())
 }
 
 /// Keyboard-triggered folder creation must ignore the pointer so a resting mouse

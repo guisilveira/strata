@@ -53,9 +53,18 @@ impl Location {
         }
     }
 
-    pub fn is_recent_root(&self) -> bool {
+    /// Any `recent:` URI. Directory operations are refused across the whole
+    /// scheme, not just the root, because a virtual child is never writable.
+    pub fn is_recent_location(&self) -> bool {
         self.uri_value()
-            .is_some_and(|uri| uri.eq_ignore_ascii_case("recent:///"))
+            .is_some_and(|uri| gio::File::for_uri(uri).has_uri_scheme("recent"))
+    }
+
+    pub fn is_recent_root(&self) -> bool {
+        self.uri_value().is_some_and(|uri| {
+            let file = gio::File::for_uri(uri);
+            file.has_uri_scheme("recent") && file.parent().is_none()
+        })
     }
 
     pub fn parent(&self) -> Option<Self> {

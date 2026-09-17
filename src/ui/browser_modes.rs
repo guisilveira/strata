@@ -3186,7 +3186,7 @@ fn install_mode_directory_drop_target(
 ) {
     if transfer_handler.borrow().is_none()
         || is_trash_location(&destination)
-        || destination.is_recent_root()
+        || destination.is_recent_location()
     {
         return;
     }

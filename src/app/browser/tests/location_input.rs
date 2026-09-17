@@ -113,6 +113,14 @@ fn location_input_accepts_uri_schemes_for_local_and_remote_locations() {
 
     assert_eq!(browser.navigate_input("recent:///"), Ok(()));
     assert_eq!(browser.active_location(), Some(Location::uri("recent:///")));
+    // The scheme is accepted verbatim, so a shorter root spelling must still
+    // land on the Recent collection rather than an unguarded virtual location.
+    assert_eq!(browser.navigate_input("recent://"), Ok(()));
+    assert!(
+        browser
+            .active_location()
+            .is_some_and(|location| location.is_recent_root())
+    );
 }
 
 #[test]

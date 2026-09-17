@@ -266,7 +266,7 @@ pub(in crate::ui) fn install_folder_context_menu(
     let customize = context_menu_option(crate::assets::icons::PALETTE, "Customize…", "");
     let properties = context_menu_option(crate::assets::icons::INFO, "Properties", "");
     let in_trash = is_trash_location(&location);
-    let in_recent = location.is_recent_root();
+    let in_recent = location.is_recent_location();
     let directory_actions = !in_trash && !in_recent;
     customize.set_visible(directory_actions && location.native_path().is_some());
     new_folder.set_visible(directory_actions);
@@ -404,7 +404,7 @@ pub(in crate::ui) fn install_folder_context_menu(
         let Some(state) = weak.upgrade() else {
             return;
         };
-        if open_with_location.is_recent_root() {
+        if open_with_location.is_recent_location() {
             return;
         }
         let file = gio_file_for_location(&open_with_location);

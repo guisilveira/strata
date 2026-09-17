@@ -232,7 +232,7 @@ impl ViewState {
         reveal: bool,
     ) {
         if is_trash_location(&destination)
-            || destination.is_recent_root()
+            || destination.is_recent_location()
             || (move_sources && sources.iter().any(|source| !can_remove_location(source)))
         {
             return;
