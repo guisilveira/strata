@@ -36,11 +36,7 @@ fn mounted_non_native_file_with_path() -> Option<gio::File> {
         .find(|file| !file.is_native() && file.path().is_some())
 }
 
-/// Recent registration is queued on the main loop so a slow or unreachable
-/// target cannot stall the caller. Own the process-wide context, launch, then
-/// drive it until every expected registration has been attempted: leaving a GIO
-/// callback in flight lets another test's iteration dispatch it and trip GLib's
-/// thread affinity check.
+// Drain GIO callbacks under the shared context lock to prevent cross-test thread-affinity failures.
 fn launch_and_settle_recent(
     app: &gio::AppInfo,
     files: &[gio::File],
@@ -95,8 +91,6 @@ fn successful_launch_registers_each_file_uri_after_launch() {
 
 #[test]
 fn launch_returns_before_recent_registration_touches_the_filesystem() {
-    // Registration used to stat every opened file synchronously on the main
-    // loop, so a slow or unreachable mount froze the UI after a good launch.
     let _serial = crate::test_support::ASYNC_MAIN_CONTEXT_DEFAULT
         .lock()
         .expect("the async test lock should not be poisoned");

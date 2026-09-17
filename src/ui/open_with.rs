@@ -110,8 +110,7 @@ fn launch_with_recent_registration(
     if candidates.is_empty() {
         return Ok(());
     }
-    // Recording is advisory and must never delay the caller: querying the type
-    // synchronously here blocked the main loop on slow or unreachable mounts.
+    // Advisory history updates must not block launching on slow mounts.
     glib::MainContext::default().spawn_local(async move {
         for file in candidates {
             let file_type = file
@@ -122,8 +121,7 @@ fn launch_with_recent_registration(
                 )
                 .await
                 .map(|info| info.file_type());
-            // An unreadable target keeps the pre-existing "record it anyway"
-            // behavior; only a confirmed directory is skipped.
+            // A successful launch remains worth recording when metadata is unavailable.
             if !matches!(
                 file_type,
                 Ok(gio::FileType::Directory | gio::FileType::Mountable)

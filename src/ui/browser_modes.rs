@@ -946,12 +946,11 @@ impl ModeViews {
     }
 
     fn grouping_for_snapshot(&self, depth: usize, snapshot: &BrowserColumnSnapshot) -> bool {
-        // GTK 4.22 cannot safely section interleaved camera batches. Device order
-        // must also remain ungrouped after completion rather than reshuffling rows.
-        // Recent must keep one global recency sequence instead of grouping folders ahead.
         if snapshot.location.is_recent_root() {
             return false;
         }
+        // GTK 4.22 cannot safely section interleaved camera batches. Device order
+        // must also remain ungrouped after completion rather than reshuffling rows.
         let device_order = self
             .browser
             .column_preferences(depth)

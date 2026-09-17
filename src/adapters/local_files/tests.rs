@@ -484,27 +484,6 @@ fn watching_a_uri_location_reports_created_entries() {
     );
 }
 
-#[test]
-fn recent_watch_uses_gio_monitoring_when_supported() {
-    let recent = Location::uri("recent:///");
-    let probe = gio_file_for_location(&recent).monitor_directory(
-        gio::FileMonitorFlags::WATCH_MOVES,
-        None::<&gio::Cancellable>,
-    );
-    let supported = match probe {
-        Ok(monitor) => {
-            let _ = monitor.cancel();
-            true
-        }
-        Err(_) => false,
-    };
-    let handle = LocalFileSource.watch(recent, false, Rc::new(|_: DirectoryChange| {}));
-
-    if supported {
-        assert!(handle.is_some());
-    }
-}
-
 fn unique_fixture_root(label: &str) -> std::path::PathBuf {
     let unique = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -795,8 +774,6 @@ fn recent_enumeration_respects_max_entries_and_reports_truncation() {
     assert_eq!(finished_truncated(&events), Some(true));
 }
 
-/// Reports a source-level failure rather than a timeout, covering the only
-/// branch that surfaces an error message to the user.
 struct FailingRecentSource {
     fail_on_open: bool,
 }

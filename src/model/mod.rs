@@ -53,8 +53,7 @@ impl Location {
         }
     }
 
-    /// Any `recent:` URI. Directory operations are refused across the whole
-    /// scheme, not just the root, because a virtual child is never writable.
+    /// Directory operations must reject virtual children as well as the root.
     pub fn is_recent_location(&self) -> bool {
         self.uri_value()
             .is_some_and(|uri| gio::File::for_uri(uri).has_uri_scheme("recent"))
@@ -383,7 +382,6 @@ pub struct FileEntry {
     pub kind: EntryKind,
     pub size: MetadataValue<u64>,
     pub modified_unix_seconds: MetadataValue<i64>,
-    /// Platform Recent use time, independent of filesystem modification time.
     pub recent_unix_seconds: MetadataValue<i64>,
     pub mode: MetadataValue<u32>,
     pub image_dimensions: MetadataValue<(u32, u32)>,

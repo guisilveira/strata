@@ -381,7 +381,6 @@ fn recent_unix_seconds(info: &gio::FileInfo) -> MetadataValue<i64> {
 fn recent_target_location(info: &gio::FileInfo) -> Option<Location> {
     let target_uri = info.attribute_string(gio::FILE_ATTRIBUTE_STANDARD_TARGET_URI)?;
     let target_file = gio::File::for_uri(target_uri.as_str());
-    // A Recent target must resolve to a real file, never another virtual child.
     if target_file.has_uri_scheme("recent") {
         return None;
     }
@@ -402,8 +401,7 @@ fn recent_entry_from_target(
     (!final_location_is_recent).then_some(entry)
 }
 
-/// Resolves a whole batch concurrently. Serial resolution let one unreachable
-/// target spend the entire load budget and truncate every entry behind it.
+// Resolve concurrently so one unreachable target cannot consume the batch's deadline.
 async fn resolve_recent_batch(
     infos: Vec<gio::FileInfo>,
     include_metadata: bool,
@@ -416,7 +414,6 @@ async fn resolve_recent_batch(
         .collect();
     let mut resolutions = Vec::with_capacity(pending.len());
     for handle in pending {
-        // A panicking or cancelled resolution drops that entry, never the batch.
         resolutions.push(handle.await.unwrap_or(RecentEntryResolution::Stale));
     }
     resolutions
@@ -900,9 +897,6 @@ fn enumerate_recent_with_source(
                         entries.push(*entry);
                     }
                     RecentEntryResolution::Stale => {}
-                    // The batch resolves concurrently, so the entries beside a
-                    // timed-out target are still good; keep them and report the
-                    // load as truncated.
                     RecentEntryResolution::TimedOut => truncated = true,
                 }
             }
@@ -1720,7 +1714,6 @@ fn log_directory_load_started(request_id: RequestId, location: &Location) {
     );
 }
 
-// GVfs can report content changes against the watched directory itself; keep only departures.
 fn pending_monitor_change(
     watched: &Location,
     changed: Option<Location>,
@@ -1757,6 +1750,7 @@ fn pending_monitor_change(
     }
 }
 
+// GVfs can report content changes against the watched directory itself; keep only departures.
 fn monitored_change_target(
     watched: &Location,
     changed: Option<Location>,

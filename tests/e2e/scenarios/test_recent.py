@@ -1,14 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Recent degrades safely where the platform provides no recent-file backend.
-
-The pinned E2E image runs with ``GIO_USE_VFS=local`` and ships no gvfs, so the
-``recent`` URI scheme is genuinely unavailable here. That is the environment the
-availability gate exists for, so these scenarios exercise it directly: Recent
-must stay out of the sidebar, must stay out even when its preference is enabled,
-and every spelling of a ``recent`` URI must be refused without disturbing the
-session. Browsing a populated Recent collection needs a gvfs-backed image and is
-covered by the Rust GTK tests instead.
-"""
+"""The pinned image has no GVfs and uses GIO_USE_VFS=local, so Recent is unavailable."""
 
 from __future__ import annotations
 
@@ -53,8 +44,6 @@ def test_neither_recent_preference_state_can_add_an_unsupported_place(strata):
     )
     enabled = "pressed" in _switch(strata.window, "Show Recent in sidebar").states
 
-    # Drive both states: availability, not the preference, is what withholds the
-    # place, so neither value may bring it back.
     for _ in range(2):
         _switch(strata.window, "Show Recent in sidebar").activate()
         enabled = not enabled
@@ -71,7 +60,6 @@ def test_neither_recent_preference_state_can_add_an_unsupported_place(strata):
         )
 
     strata.keyboard.press("Escape")
-    # The rebuilds must leave the other default places alone.
     strata.sidebar_button("Home")
     strata.sidebar_button("Trash")
 
@@ -96,7 +84,5 @@ def test_every_recent_uri_spelling_is_refused_without_disturbing_the_session(str
             is None,
             "the failure report to close",
         )
-        # The refused location must leave the browser where it was, not on a
-        # half-built column that still accepts directory actions.
         strata.wait_for_directory(root)
         strata.entry("documents")

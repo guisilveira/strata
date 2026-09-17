@@ -75,8 +75,6 @@ fn recent_root_is_named_and_has_no_product_parent() {
 
 #[test]
 fn every_recent_root_spelling_is_treated_as_the_collection_root() {
-    // The location bar accepts the `recent` scheme verbatim, so the root must be
-    // recognized however the user spells it, not only as the canonical URI.
     for uri in ["recent:///", "recent://", "RECENT:///"] {
         let location = Location::uri(uri);
         assert!(location.is_recent_root(), "{uri} should be the Recent root");

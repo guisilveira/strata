@@ -241,17 +241,9 @@ fn recent_available() -> RecentAvailability {
 }
 
 #[test]
-fn recent_sidebar_is_visible_when_preference_and_availability_allow_it() {
+fn recent_sidebar_requires_preference_platform_backend_and_nonlocal_context() {
     assert!(should_show_recent_place(true, false, recent_available()));
-}
-
-#[test]
-fn recent_sidebar_is_hidden_when_its_visibility_preference_is_disabled() {
     assert!(!should_show_recent_place(false, false, recent_available()));
-}
-
-#[test]
-fn recent_sidebar_is_hidden_when_platform_recent_tracking_is_disabled() {
     assert!(!should_show_recent_place(
         true,
         false,
@@ -260,10 +252,6 @@ fn recent_sidebar_is_hidden_when_platform_recent_tracking_is_disabled() {
             ..recent_available()
         },
     ));
-}
-
-#[test]
-fn recent_sidebar_is_hidden_when_the_runtime_backend_is_unavailable() {
     assert!(!should_show_recent_place(
         true,
         false,
@@ -272,9 +260,5 @@ fn recent_sidebar_is_hidden_when_the_runtime_backend_is_unavailable() {
             ..recent_available()
         },
     ));
-}
-
-#[test]
-fn recent_sidebar_is_hidden_in_local_only_contexts() {
     assert!(!should_show_recent_place(true, true, recent_available()));
 }

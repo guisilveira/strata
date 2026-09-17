@@ -302,9 +302,6 @@ fn assert_actions(popover: &gtk::Popover, present: &[&str], absent: &[&str]) {
     }
 }
 
-/// A separator must divide two groups of actions. When every action below the
-/// last separator is hidden the menu renders a rule with nothing under it, so
-/// assert on what is actually rendered rather than on what was appended.
 fn assert_separators_divide_actions(popover: &gtk::Popover) {
     let rendered: Vec<bool> = descendants(&popover.clone().upcast::<gtk::Widget>())
         .into_iter()

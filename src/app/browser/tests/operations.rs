@@ -244,9 +244,6 @@ fn every_recent_spelling_is_rejected_by_creation_and_transfer_commands() {
     let events = Rc::new(RefCell::new(Vec::new()));
     let observed = events.clone();
     browser.observe(move |event| observed.borrow_mut().push(event.clone()));
-    // The location bar accepts the scheme verbatim, so an alternate root
-    // spelling and a virtual child must be refused exactly like the canonical
-    // root; each is a distinct way into the same commands.
     for uri in ["recent:///", "recent://", "recent:///entry-id"] {
         let recent = Location::uri(uri);
 
