@@ -36,29 +36,56 @@ fn mounted_non_native_file_with_path() -> Option<gio::File> {
         .find(|file| !file.is_native() && file.path().is_some())
 }
 
+/// Recent registration is queued on the main loop so a slow or unreachable
+/// target cannot stall the caller. Own the process-wide context, launch, then
+/// drive it until every expected registration has been attempted: leaving a GIO
+/// callback in flight lets another test's iteration dispatch it and trip GLib's
+/// thread affinity check.
+fn launch_and_settle_recent(
+    app: &gio::AppInfo,
+    files: &[gio::File],
+    expected: usize,
+    accept: bool,
+) -> (Result<(), glib::Error>, Vec<String>) {
+    let _serial = crate::test_support::ASYNC_MAIN_CONTEXT_DEFAULT
+        .lock()
+        .expect("the async test lock should not be poisoned");
+    let context = glib::MainContext::default();
+    let _owner = context.acquire().expect("context owner");
+    let recorded = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let sink = recorded.clone();
+    let result =
+        launch_with_recent_registration(app, files, None::<&gio::AppLaunchContext>, move |file| {
+            sink.borrow_mut().push(file.uri().to_string());
+            accept
+        });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while recorded.borrow().len() < expected && Instant::now() < deadline {
+        while context.pending() {
+            context.iteration(false);
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    while context.pending() {
+        context.iteration(false);
+    }
+    let recorded = recorded.borrow().clone();
+    (result, recorded)
+}
+
 #[test]
 fn successful_launch_registers_each_file_uri_after_launch() {
     let files = [
         gio::File::for_path("/tmp/ticket-05-first.txt"),
         gio::File::for_path("/tmp/ticket-05-second.txt"),
     ];
-    let registered = Rc::new(std::cell::RefCell::new(Vec::new()));
-    let registered_state = registered.clone();
     let app = path_only_app();
 
-    let result = launch_with_recent_registration(
-        &app,
-        &files,
-        None::<&gio::AppLaunchContext>,
-        move |file| {
-            registered_state.borrow_mut().push(file.uri().to_string());
-            true
-        },
-    );
+    let (result, registered) = launch_and_settle_recent(&app, &files, files.len(), true);
 
     assert!(result.is_ok());
     assert_eq!(
-        *registered.borrow(),
+        registered,
         files
             .iter()
             .map(|file| file.uri().to_string())
@@ -67,24 +94,53 @@ fn successful_launch_registers_each_file_uri_after_launch() {
 }
 
 #[test]
+fn launch_returns_before_recent_registration_touches_the_filesystem() {
+    // Registration used to stat every opened file synchronously on the main
+    // loop, so a slow or unreachable mount froze the UI after a good launch.
+    let _serial = crate::test_support::ASYNC_MAIN_CONTEXT_DEFAULT
+        .lock()
+        .expect("the async test lock should not be poisoned");
+    let context = glib::MainContext::default();
+    let _owner = context.acquire().expect("context owner");
+    let files = [gio::File::for_path("/tmp/ticket-05-deferred.txt")];
+    let registered = Rc::new(Cell::new(false));
+    let sink = registered.clone();
+    let app = path_only_app();
+
+    launch_with_recent_registration(&app, &files, None::<&gio::AppLaunchContext>, move |_| {
+        sink.set(true);
+        true
+    })
+    .expect("path launch");
+
+    assert!(
+        !registered.get(),
+        "launch must not wait for the Recent type query"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !registered.get() && Instant::now() < deadline {
+        while context.pending() {
+            context.iteration(false);
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(registered.get(), "the queued registration should still run");
+}
+
+#[test]
 fn failed_application_launch_does_not_register_recent_files() {
     let files = [gio::File::for_path("/tmp/ticket-05-failed.txt")];
-    let registered = Rc::new(Cell::new(false));
-    let registration_state = registered.clone();
     let app = gio::AppInfo::create_from_commandline(
         "/definitely/not-a-real-strata-launcher %F",
         Some("Failing application"),
         gio::AppInfoCreateFlags::NONE,
     )
     .expect("application");
-    let result =
-        launch_with_recent_registration(&app, &files, None::<&gio::AppLaunchContext>, move |_| {
-            registration_state.set(true);
-            false
-        });
+
+    let (result, registered) = launch_and_settle_recent(&app, &files, 0, false);
 
     assert!(result.is_err());
-    assert!(!registered.get());
+    assert!(registered.is_empty());
 }
 
 #[test]
@@ -92,17 +148,12 @@ fn recent_registration_failure_does_not_fail_successful_launch() {
     let files = [gio::File::for_path(
         "/tmp/ticket-05-registration-failure.txt",
     )];
-    let registered = Rc::new(Cell::new(false));
-    let registration_state = registered.clone();
     let app = path_only_app();
-    let result =
-        launch_with_recent_registration(&app, &files, None::<&gio::AppLaunchContext>, move |_| {
-            registration_state.set(true);
-            false
-        });
+
+    let (result, registered) = launch_and_settle_recent(&app, &files, 1, false);
 
     assert!(result.is_ok());
-    assert!(registered.get());
+    assert_eq!(registered.len(), 1);
 }
 
 #[test]
@@ -113,17 +164,12 @@ fn successful_open_with_does_not_register_a_directory() {
     let directory = gio::File::for_path(fixture.path());
     let target = gio::File::for_path(&target_path);
     let files = [directory, target.clone()];
-    let registered = Rc::new(std::cell::RefCell::new(Vec::new()));
-    let registered_state = registered.clone();
     let app = path_only_app();
 
-    launch_with_recent_registration(&app, &files, None::<&gio::AppLaunchContext>, move |file| {
-        registered_state.borrow_mut().push(file.uri().to_string());
-        true
-    })
-    .expect("Open With launch");
+    let (result, registered) = launch_and_settle_recent(&app, &files, 1, true);
 
-    assert_eq!(*registered.borrow(), vec![target.uri().to_string()]);
+    result.expect("Open With launch");
+    assert_eq!(registered, vec![target.uri().to_string()]);
 }
 
 #[test]
@@ -131,8 +177,6 @@ fn recent_open_registers_the_target_uri_instead_of_the_collection_uri() {
     let target = gio::File::for_path("/tmp/ticket-05-real-target.txt");
     let recent_entry = gio::File::for_uri("recent:///ticket-05-entry");
     let files = [recent_entry, target.clone()];
-    let registered = Rc::new(std::cell::RefCell::new(Vec::new()));
-    let registered_state = registered.clone();
     let app = gio::AppInfo::create_from_commandline(
         "/bin/true %U",
         Some("URI handler"),
@@ -140,13 +184,10 @@ fn recent_open_registers_the_target_uri_instead_of_the_collection_uri() {
     )
     .expect("application");
 
-    launch_with_recent_registration(&app, &files, None::<&gio::AppLaunchContext>, move |file| {
-        registered_state.borrow_mut().push(file.uri().to_string());
-        true
-    })
-    .expect("Open With launch");
+    let (result, registered) = launch_and_settle_recent(&app, &files, 1, true);
 
-    assert_eq!(*registered.borrow(), vec![target.uri().to_string()]);
+    result.expect("Open With launch");
+    assert_eq!(registered, vec![target.uri().to_string()]);
 }
 
 fn assert_requires_uri_handlers(file: &gio::File) {
@@ -217,13 +258,9 @@ fn fuse_backed_non_native_files_allow_path_handlers() {
     assert!(requires_uri_handlers(&[fuse.clone(), trash]));
 
     let app = path_only_app();
-    launch_with_recent_registration(
-        &app,
-        std::slice::from_ref(&fuse),
-        None::<&gio::AppLaunchContext>,
-        |_| true,
-    )
-    .expect("FUSE path launch");
+    launch_and_settle_recent(&app, std::slice::from_ref(&fuse), 1, true)
+        .0
+        .expect("FUSE path launch");
 }
 
 #[test]
@@ -245,13 +282,9 @@ fn path_only_launch_rejects_files_without_a_local_path() {
 fn path_only_launch_allows_files_with_a_local_path() {
     let local = gio::File::for_path("/tmp/local.txt");
     let app = path_only_app();
-    launch_with_recent_registration(
-        &app,
-        std::slice::from_ref(&local),
-        None::<&gio::AppLaunchContext>,
-        |_| true,
-    )
-    .expect("path launch");
+    launch_and_settle_recent(&app, std::slice::from_ref(&local), 1, true)
+        .0
+        .expect("path launch");
 }
 
 #[test]
@@ -280,7 +313,8 @@ fn uri_capable_launch_preserves_every_remote_argument() {
         gio::File::for_uri("trash:///alpha%20file.txt"),
         gio::File::for_uri("sftp://example.invalid/beta.txt"),
     ];
-    launch_with_recent_registration(&app, &files, None::<&gio::AppLaunchContext>, |_| true)
+    launch_and_settle_recent(&app, &files, files.len(), true)
+        .0
         .expect("URI launch");
     let deadline = Instant::now() + Duration::from_secs(3);
     let received = loop {

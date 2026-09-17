@@ -92,7 +92,7 @@ fn launch_with_recent_registration(
     app: &gio::AppInfo,
     files: &[gio::File],
     context: Option<&impl IsA<gio::AppLaunchContext>>,
-    register_recent: impl Fn(&gio::File) -> bool,
+    register_recent: impl Fn(&gio::File) -> bool + 'static,
 ) -> Result<(), glib::Error> {
     // GIO drops files without a local path when expanding %f/%F.
     if !app.supports_uris() && requires_uri_handlers(files) {
@@ -102,16 +102,36 @@ fn launch_with_recent_registration(
         ));
     }
     app.launch(files, context)?;
-    for file in files {
-        if !file.has_uri_scheme("recent")
-            && !matches!(
-                file.query_file_type(gio::FileQueryInfoFlags::NONE, None::<&gio::Cancellable>),
-                gio::FileType::Directory | gio::FileType::Mountable
-            )
-        {
-            register_recent(file);
-        }
+    let candidates: Vec<gio::File> = files
+        .iter()
+        .filter(|file| !file.has_uri_scheme("recent"))
+        .cloned()
+        .collect();
+    if candidates.is_empty() {
+        return Ok(());
     }
+    // Recording is advisory and must never delay the caller: querying the type
+    // synchronously here blocked the main loop on slow or unreachable mounts.
+    glib::MainContext::default().spawn_local(async move {
+        for file in candidates {
+            let file_type = file
+                .query_info_future(
+                    "standard::type",
+                    gio::FileQueryInfoFlags::NONE,
+                    glib::Priority::DEFAULT,
+                )
+                .await
+                .map(|info| info.file_type());
+            // An unreadable target keeps the pre-existing "record it anyway"
+            // behavior; only a confirmed directory is skipped.
+            if !matches!(
+                file_type,
+                Ok(gio::FileType::Directory | gio::FileType::Mountable)
+            ) {
+                register_recent(&file);
+            }
+        }
+    });
     Ok(())
 }
 
