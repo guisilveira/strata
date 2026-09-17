@@ -1,0 +1,281 @@
+// SPDX-License-Identifier: MIT
+
+use std::{
+    cell::{Cell, RefCell},
+    path::PathBuf,
+    rc::Rc,
+};
+
+use gtk::{gdk, glib, pango, prelude::*};
+use vte4::prelude::*;
+
+use crate::assets::{self, icons};
+
+use super::theme::{SourcePalette, ThemeManager, ThemeTokens, blend};
+
+const PANEL_HEIGHT: i32 = 240;
+const MIN_PANEL_HEIGHT: i32 = 96;
+const SCROLLBACK_LINES: i64 = 10_000;
+const BRIGHT_MIX: f64 = 0.35;
+
+type DirectorySource = Rc<dyn Fn() -> Option<PathBuf>>;
+
+/// Window-scoped embedded terminal. The shell is spawned on first reveal and
+/// outlives hiding, navigation, and the folder it started in.
+#[derive(Clone)]
+pub(super) struct TerminalPanel {
+    state: Rc<PanelState>,
+}
+
+struct PanelState {
+    widget: gtk::Box,
+    terminal: vte4::Terminal,
+    split: RefCell<Option<gtk::Paned>>,
+    directory: DirectorySource,
+    child: Cell<Option<glib::Pid>>,
+    sized: Cell<bool>,
+}
+
+impl TerminalPanel {
+    pub(super) fn new(preferences: &Rc<ThemeManager>, directory: DirectorySource) -> Self {
+        let terminal = vte4::Terminal::new();
+        terminal.set_scrollback_lines(SCROLLBACK_LINES);
+        terminal.set_scroll_on_output(true);
+        terminal.set_mouse_autohide(true);
+        terminal.set_hexpand(true);
+        terminal.set_vexpand(true);
+
+        let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        widget.add_css_class("terminal-panel");
+        widget.set_visible(false);
+        widget.set_size_request(-1, MIN_PANEL_HEIGHT);
+
+        let state = Rc::new(PanelState {
+            widget,
+            terminal,
+            split: RefCell::new(None),
+            directory,
+            child: Cell::new(None),
+            sized: Cell::new(false),
+        });
+        let panel = Self { state };
+        panel.state.widget.append(&panel.header());
+        panel.state.widget.append(&panel.state.terminal);
+        panel.bind_theme(preferences);
+        let closing = panel.clone();
+        panel
+            .state
+            .terminal
+            .connect_child_exited(move |_, _| closing.child_exited());
+        panel
+    }
+
+    pub(super) fn widget(&self) -> &gtk::Widget {
+        self.state.widget.upcast_ref()
+    }
+
+    /// The panel shares the window's vertical split so it can be resized.
+    pub(super) fn attach_split(&self, split: &gtk::Paned) {
+        self.state.split.replace(Some(split.clone()));
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_session(&self) -> bool {
+        self.state.child.get().is_some()
+    }
+
+    pub(super) fn is_visible(&self) -> bool {
+        self.state.widget.is_visible()
+    }
+
+    pub(super) fn owns_focus(&self, focused: Option<&gtk::Widget>) -> bool {
+        focused.is_some_and(|widget| {
+            let terminal = self.state.terminal.upcast_ref::<gtk::Widget>();
+            widget == terminal || widget.is_ancestor(terminal)
+        })
+    }
+
+    /// Returns whether the panel is visible afterwards.
+    pub(super) fn toggle(&self) -> bool {
+        if self.is_visible() {
+            self.state.widget.set_visible(false);
+            return false;
+        }
+        self.state.widget.set_visible(true);
+        self.restore_height();
+        self.spawn_if_needed();
+        self.state.terminal.grab_focus();
+        true
+    }
+
+    /// Ends the shell and hides the panel. The next reveal starts a fresh
+    /// session in whatever folder is active then.
+    pub(super) fn close_session(&self) {
+        self.shutdown();
+        self.state.widget.set_visible(false);
+    }
+
+    /// Ends the shell. VTE frees the PTY with the widget, and detaching it
+    /// here instead would tear it out from under the still-running child.
+    pub(super) fn shutdown(&self) {
+        if let Some(pid) = self.state.child.take() {
+            terminate(pid);
+        }
+    }
+
+    fn header(&self) -> gtk::Box {
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        header.add_css_class("terminal-panel-header");
+        let label = gtk::Label::new(Some("Terminal"));
+        label.add_css_class("terminal-panel-title");
+        label.set_hexpand(true);
+        label.set_xalign(0.0);
+        let close = gtk::Button::builder()
+            .tooltip_text("End the terminal session (F4 hides it instead)")
+            .build();
+        close.set_child(Some(&assets::chrome_icon(icons::X)));
+        close.add_css_class("terminal-panel-close");
+        close.set_cursor_from_name(Some("pointer"));
+        let panel = self.clone();
+        close.connect_clicked(move |_| panel.close_session());
+        header.append(&label);
+        header.append(&close);
+        header
+    }
+
+    fn bind_theme(&self, preferences: &Rc<ThemeManager>) {
+        let terminal = self.state.terminal.clone();
+        preferences.bind_preference(
+            &self.state.widget,
+            |manager| {
+                (
+                    manager.appearance_tokens(),
+                    manager.appearance_source_palette(),
+                )
+            },
+            move |_, (tokens, palette)| apply_colors(&terminal, &tokens, palette.as_ref()),
+        );
+        let font_terminal = self.state.terminal.clone();
+        preferences.bind_preference(
+            &self.state.widget,
+            |manager| manager.text_size(),
+            move |_, _| font_terminal.set_font_desc(interface_font().as_ref()),
+        );
+    }
+
+    /// The split keeps whatever height the user dragged; only the first reveal
+    /// of a window picks a size.
+    fn restore_height(&self) {
+        if self.state.sized.replace(true) {
+            return;
+        }
+        if let Some(split) = self.state.split.borrow().clone() {
+            let available = split.height();
+            if available > PANEL_HEIGHT {
+                split.set_position(available - PANEL_HEIGHT);
+            }
+        }
+    }
+
+    fn spawn_if_needed(&self) {
+        if self.state.child.get().is_some() {
+            return;
+        }
+        // A replacement session must not open onto the dead one's scrollback.
+        self.state.terminal.reset(true, true);
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let directory = (self.state.directory)();
+        // VTE takes the working directory as UTF-8; a path that is not
+        // representable inherits Strata's instead of failing the spawn.
+        let directory = directory.and_then(|path| path.into_os_string().into_string().ok());
+        let panel = self.clone();
+        let failed_shell = shell.clone();
+        self.state.terminal.spawn_async(
+            vte4::PtyFlags::DEFAULT,
+            directory.as_deref(),
+            &[shell.as_str()],
+            &[],
+            glib::SpawnFlags::DEFAULT,
+            || {},
+            -1,
+            None::<&gtk::gio::Cancellable>,
+            move |result| match result {
+                Ok(pid) => panel.state.child.set(Some(pid)),
+                Err(error) => {
+                    tracing::warn!(%error, shell = %failed_shell, "unable to start embedded terminal");
+                    panel.state.widget.set_visible(false);
+                }
+            },
+        );
+    }
+
+    fn child_exited(&self) {
+        self.state.child.set(None);
+        self.state.widget.set_visible(false);
+    }
+}
+
+fn terminate(pid: glib::Pid) {
+    let Some(pid) = rustix::process::Pid::from_raw(pid.0) else {
+        return;
+    };
+    let _ = rustix::process::kill_process(pid, rustix::process::Signal::HUP);
+}
+
+/// Strata sets its monospace family and size on the GTK settings, so the
+/// terminal follows the text-size preference by reading it back.
+fn interface_font() -> Option<pango::FontDescription> {
+    let name = gtk::Settings::default()?.gtk_font_name()?;
+    Some(pango::FontDescription::from_string(&name))
+}
+
+fn apply_colors(terminal: &vte4::Terminal, tokens: &ThemeTokens, palette: Option<&SourcePalette>) {
+    let parse = |value: &str| gdk::RGBA::parse(value).ok();
+    let (Some(foreground), Some(background)) = (parse(&tokens.text), parse(&tokens.background))
+    else {
+        return;
+    };
+    // An empty palette leaves VTE's own sixteen colors in place.
+    let ansi = palette
+        .map(|palette| ansi_palette(tokens, palette))
+        .unwrap_or_default();
+    let ansi: Vec<gdk::RGBA> = ansi.iter().filter_map(|color| parse(color)).collect();
+    let ansi: Vec<&gdk::RGBA> = ansi.iter().collect();
+    terminal.set_colors(Some(&foreground), Some(&background), &ansi);
+    terminal.set_color_cursor(parse(&tokens.accent).as_ref());
+    terminal.set_color_cursor_foreground(Some(&background));
+    terminal.set_color_highlight(parse(&tokens.highlight).as_ref());
+    terminal.set_color_highlight_foreground(Some(&foreground));
+    terminal.set_bold_is_bright(true);
+}
+
+/// The sixteen ANSI colors, drawn from the same tokens and syntax colors that
+/// style the rest of Strata rather than VTE's built-in palette.
+fn ansi_palette(tokens: &ThemeTokens, palette: &SourcePalette) -> Vec<String> {
+    let normal = [
+        tokens.background.clone(),
+        tokens.danger.clone(),
+        palette.string.clone(),
+        palette.constant.clone(),
+        tokens.accent.clone(),
+        palette.statement.clone(),
+        palette.type_color.clone(),
+        tokens.text.clone(),
+    ];
+    // Bright variants move further from the background, which lightens a dark
+    // theme and darkens a light one.
+    let bright = [
+        tokens.dim_text.clone(),
+        blend(&tokens.danger, &tokens.text, BRIGHT_MIX),
+        blend(&palette.string, &tokens.text, BRIGHT_MIX),
+        blend(&palette.constant, &tokens.text, BRIGHT_MIX),
+        blend(&tokens.accent, &tokens.text, BRIGHT_MIX),
+        blend(&palette.statement, &tokens.text, BRIGHT_MIX),
+        blend(&palette.type_color, &tokens.text, BRIGHT_MIX),
+        tokens.text.clone(),
+    ];
+    normal.into_iter().chain(bright).collect()
+}
+
+#[cfg(test)]
+mod tests;

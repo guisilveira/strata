@@ -62,13 +62,13 @@ pub struct ThemeTokens {
     pub dim_text: String,
 }
 
-#[derive(Clone)]
-struct SourcePalette {
-    statement: String,
-    string: String,
-    constant: String,
-    type_color: String,
-    preprocessor: String,
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct SourcePalette {
+    pub(super) statement: String,
+    pub(super) string: String,
+    pub(super) constant: String,
+    pub(super) type_color: String,
+    pub(super) preprocessor: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1100,6 +1100,16 @@ impl ThemeManager {
         self.starter_tokens()
     }
 
+    /// The theme's own syntax colors, when it carries a real spread of hues.
+    /// The accent-derived fallback is deliberately not returned here: it is
+    /// readable as syntax highlighting but collapses the ANSI palette a
+    /// terminal needs to keep distinct.
+    pub(super) fn appearance_source_palette(&self) -> Option<SourcePalette> {
+        self.follows_omarchy()
+            .then(load_omarchy_source_palette)
+            .flatten()
+    }
+
     pub fn starter_tokens(&self) -> ThemeTokens {
         self.current_tokens().unwrap_or_else(azure_tokens)
     }
@@ -1679,14 +1689,20 @@ fn ensure_source_style_scheme_installed() {
     });
 }
 
-fn source_style_scheme_xml(tokens: &ThemeTokens, palette: Option<&SourcePalette>) -> String {
-    let fallback = SourcePalette {
+/// Themes that carry no syntax colors of their own get a spread derived from
+/// the accent, so every theme still has a full palette.
+fn fallback_source_palette(tokens: &ThemeTokens) -> SourcePalette {
+    SourcePalette {
         statement: tokens.accent.clone(),
         string: blend(&tokens.accent, &tokens.text, 0.48),
         constant: blend(&tokens.accent, &tokens.text, 0.18),
         type_color: blend(&tokens.accent, &tokens.text, 0.24),
         preprocessor: blend(&tokens.accent, &tokens.text, 0.32),
-    };
+    }
+}
+
+fn source_style_scheme_xml(tokens: &ThemeTokens, palette: Option<&SourcePalette>) -> String {
+    let fallback = fallback_source_palette(tokens);
     let palette = palette.unwrap_or(&fallback);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1818,7 +1834,7 @@ pub(crate) fn color_to_hex(value: &str) -> String {
         .unwrap_or_else(|| value.to_owned())
 }
 
-fn blend(left: &str, right: &str, amount: f64) -> String {
+pub(super) fn blend(left: &str, right: &str, amount: f64) -> String {
     let (Some(left), Some(right)) = (parse_rgb_channels(left), parse_rgb_channels(right)) else {
         return right.to_owned();
     };

@@ -42,6 +42,7 @@ const TOOLS: &[Shortcut] = &[
     ("Ctrl+Shift+K", "Jump to a recent folder"),
     ("Ctrl+L", "Edit the location"),
     ("Ctrl+T", "Open a terminal"),
+    ("F4", "Show or hide the embedded terminal"),
     ("F5", "Refresh"),
     ("Ctrl+H / Ctrl+.", "Show or hide hidden files"),
     ("Ctrl+1 / 2 / 3", "Switch to Columns, Icons, or List"),
