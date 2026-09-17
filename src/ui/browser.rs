@@ -1332,9 +1332,12 @@ impl BrowserView {
     }
 
     /// The local directory the embedded terminal starts in. Unlike Ctrl+T this
-    /// ignores the selection, which starts on the first entry of every folder.
+    /// ignores the selection, which starts on the first entry of every folder,
+    /// and the hovered column, so it matches the location in the breadcrumb
+    /// rather than whatever the pointer happens to rest on.
     pub fn terminal_directory(&self) -> Option<std::path::PathBuf> {
-        let location = self.listing_location()?;
+        let depth = self.state.browser.active_depth()?;
+        let location = self.state.browser.location_at(depth)?;
         can_open_terminal(&location)
             .then(|| location.native_path().map(std::path::Path::to_path_buf))
             .flatten()
