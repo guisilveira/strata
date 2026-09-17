@@ -48,3 +48,25 @@ fn theme_colors_fill_sixteen_distinguishable_ansi_slots() {
         assert_ne!(colors[slot], colors[slot + 8], "bright slot {slot} matches");
     }
 }
+
+#[test]
+fn the_panel_releases_its_state_when_dropped() {
+    crate::test_support::gtk_test(
+        "ui::terminal_panel::tests::the_panel_releases_its_state_when_dropped",
+        || {
+            let preferences = super::ThemeManager::shared();
+            let panel = super::TerminalPanel::new(&preferences, std::rc::Rc::new(|| None));
+            let state = std::rc::Rc::downgrade(&panel.state);
+
+            drop(panel);
+
+            // Callbacks the panel installs on its own widgets must not own it,
+            // or a closed window keeps its terminal and child alive.
+            assert!(
+                state.upgrade().is_none(),
+                "the panel is still held by {} reference(s)",
+                state.strong_count()
+            );
+        },
+    );
+}

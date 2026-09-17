@@ -16,6 +16,9 @@ use super::theme::{SourcePalette, ThemeManager, ThemeTokens, blend};
 const PANEL_HEIGHT: i32 = 240;
 const MIN_PANEL_HEIGHT: i32 = 96;
 const SCROLLBACK_LINES: i64 = 10_000;
+/// Shown in the panel when the browser is somewhere a local shell cannot go.
+const UNAVAILABLE: &str =
+    "\r\n\u{1b}[7m The embedded terminal is only available for local folders. \u{1b}[0m\r\n";
 const BRIGHT_MIX: f64 = 0.35;
 
 type DirectorySource = Rc<dyn Fn() -> Option<PathBuf>>;
@@ -62,11 +65,12 @@ impl TerminalPanel {
         panel.state.widget.append(&panel.header());
         panel.state.widget.append(&panel.state.terminal);
         panel.bind_theme(preferences);
-        let closing = panel.clone();
-        panel
-            .state
-            .terminal
-            .connect_child_exited(move |_, _| closing.child_exited());
+        let weak = Rc::downgrade(&panel.state);
+        panel.state.terminal.connect_child_exited(move |_, _| {
+            if let Some(state) = weak.upgrade() {
+                Self { state }.child_exited();
+            }
+        });
         panel
     }
 
@@ -136,8 +140,12 @@ impl TerminalPanel {
         close.set_child(Some(&assets::chrome_icon(icons::X)));
         close.add_css_class("terminal-panel-close");
         close.set_cursor_from_name(Some("pointer"));
-        let panel = self.clone();
-        close.connect_clicked(move |_| panel.close_session());
+        let weak = Rc::downgrade(&self.state);
+        close.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                Self { state }.close_session();
+            }
+        });
         header.append(&label);
         header.append(&close);
         header
@@ -183,27 +191,37 @@ impl TerminalPanel {
         }
         // A replacement session must not open onto the dead one's scrollback.
         self.state.terminal.reset(true, true);
+        // VTE inherits Strata's own working directory when it is given none,
+        // which would silently open Trash or a remote location in whatever
+        // directory Strata happens to be running from.
+        let Some(directory) =
+            (self.state.directory)().and_then(|path| path.into_os_string().into_string().ok())
+        else {
+            self.state.terminal.feed(UNAVAILABLE.as_bytes());
+            return;
+        };
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        let directory = (self.state.directory)();
-        // VTE takes the working directory as UTF-8; a path that is not
-        // representable inherits Strata's instead of failing the spawn.
-        let directory = directory.and_then(|path| path.into_os_string().into_string().ok());
-        let panel = self.clone();
+        let weak = Rc::downgrade(&self.state);
         let failed_shell = shell.clone();
         self.state.terminal.spawn_async(
             vte4::PtyFlags::DEFAULT,
-            directory.as_deref(),
+            Some(directory.as_str()),
             &[shell.as_str()],
             &[],
             glib::SpawnFlags::DEFAULT,
             || {},
             -1,
             None::<&gtk::gio::Cancellable>,
-            move |result| match result {
-                Ok(pid) => panel.state.child.set(Some(pid)),
-                Err(error) => {
-                    tracing::warn!(%error, shell = %failed_shell, "unable to start embedded terminal");
-                    panel.state.widget.set_visible(false);
+            move |result| {
+                let Some(state) = weak.upgrade() else {
+                    return;
+                };
+                match result {
+                    Ok(pid) => state.child.set(Some(pid)),
+                    Err(error) => {
+                        tracing::warn!(%error, shell = %failed_shell, "unable to start embedded terminal");
+                        state.widget.set_visible(false);
+                    }
                 }
             },
         );
