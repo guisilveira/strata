@@ -402,6 +402,26 @@ fn recent_entry_from_target(
     (!final_location_is_recent).then_some(entry)
 }
 
+/// Resolves a whole batch concurrently. Serial resolution let one unreachable
+/// target spend the entire load budget and truncate every entry behind it.
+async fn resolve_recent_batch(
+    infos: Vec<gio::FileInfo>,
+    include_metadata: bool,
+    deadline: Instant,
+) -> Vec<RecentEntryResolution> {
+    let context = glib::MainContext::default();
+    let pending: Vec<_> = infos
+        .into_iter()
+        .map(|info| context.spawn_local(resolve_recent_entry(info, include_metadata, deadline)))
+        .collect();
+    let mut resolutions = Vec::with_capacity(pending.len());
+    for handle in pending {
+        // A panicking or cancelled resolution drops that entry, never the batch.
+        resolutions.push(handle.await.unwrap_or(RecentEntryResolution::Stale));
+    }
+    resolutions
+}
+
 async fn resolve_recent_entry(
     recent_info: gio::FileInfo,
     include_metadata: bool,
@@ -777,17 +797,9 @@ impl RecentEnumerationSource for GioRecentEnumerationSource {
             if files.is_empty() {
                 return Ok(None);
             }
-            let mut resolutions = Vec::with_capacity(files.len());
-            for recent_info in files {
-                let resolution =
-                    resolve_recent_entry(recent_info, include_metadata, deadline).await;
-                let timed_out = matches!(resolution, RecentEntryResolution::TimedOut);
-                resolutions.push(resolution);
-                if timed_out {
-                    break;
-                }
-            }
-            Ok(Some(resolutions))
+            Ok(Some(
+                resolve_recent_batch(files, include_metadata, deadline).await,
+            ))
         })
     }
 }
@@ -888,10 +900,10 @@ fn enumerate_recent_with_source(
                         entries.push(*entry);
                     }
                     RecentEntryResolution::Stale => {}
-                    RecentEntryResolution::TimedOut => {
-                        truncated = true;
-                        break;
-                    }
+                    // The batch resolves concurrently, so the entries beside a
+                    // timed-out target are still good; keep them and report the
+                    // load as truncated.
+                    RecentEntryResolution::TimedOut => truncated = true,
                 }
             }
             if !entries.is_empty() {

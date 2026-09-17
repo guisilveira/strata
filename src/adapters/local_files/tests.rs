@@ -795,6 +795,112 @@ fn recent_enumeration_respects_max_entries_and_reports_truncation() {
     assert_eq!(finished_truncated(&events), Some(true));
 }
 
+/// Reports a source-level failure rather than a timeout, covering the only
+/// branch that surfaces an error message to the user.
+struct FailingRecentSource {
+    fail_on_open: bool,
+}
+
+impl RecentEnumerationSource for FailingRecentSource {
+    fn open(&self, _deadline: Instant) -> RecentEnumerationFuture<Result<(), RecentSourceError>> {
+        let fail = self.fail_on_open;
+        Box::pin(async move {
+            if fail {
+                Err(RecentSourceError::Failed(
+                    "recent backend is gone".to_owned(),
+                ))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn next_batch(
+        &self,
+        _batch_size: usize,
+        _include_metadata: bool,
+        _deadline: Instant,
+    ) -> RecentEnumerationFuture<Result<Option<Vec<RecentEntryResolution>>, RecentSourceError>>
+    {
+        Box::pin(async { Err(RecentSourceError::Failed("recent read failed".to_owned())) })
+    }
+}
+
+fn recent_failure_message(events: &[DirectoryEvent]) -> Option<&str> {
+    events.iter().find_map(|event| match event {
+        DirectoryEvent::Failed { message, .. } => Some(message.as_str()),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_failing_recent_open_reports_the_backend_error_instead_of_an_empty_collection() {
+    let events = run_recent_enumerate(
+        recent_request(),
+        Box::new(FailingRecentSource { fail_on_open: true }),
+    );
+
+    assert_eq!(
+        recent_failure_message(&events),
+        Some("recent backend is gone")
+    );
+    assert_eq!(finished_truncated(&events), None);
+    assert!(batched_entries(&events).is_empty());
+}
+
+#[test]
+fn a_failing_recent_read_reports_the_backend_error_instead_of_finishing_cleanly() {
+    let events = run_recent_enumerate(
+        recent_request(),
+        Box::new(FailingRecentSource {
+            fail_on_open: false,
+        }),
+    );
+
+    assert_eq!(recent_failure_message(&events), Some("recent read failed"));
+    assert_eq!(finished_truncated(&events), None);
+}
+
+#[test]
+fn an_unresolvable_target_does_not_discard_the_entries_beside_it() {
+    let (source, _) = RecentFixtureSource::new(
+        vec![
+            recent_resolution("before"),
+            RecentEntryResolution::TimedOut,
+            recent_resolution("after"),
+        ],
+        false,
+    );
+
+    let events = run_recent_enumerate(
+        DirectoryRequest {
+            batch_size: 3,
+            ..recent_request()
+        },
+        Box::new(source),
+    );
+
+    assert_eq!(
+        batched_entries(&events)
+            .iter()
+            .map(|entry| entry.display_name.clone())
+            .collect::<Vec<_>>(),
+        ["before", "after"]
+    );
+    assert_eq!(finished_truncated(&events), Some(true));
+}
+
+fn recent_request() -> DirectoryRequest {
+    DirectoryRequest {
+        id: RequestId(1),
+        location: Location::uri("recent:///"),
+        batch_size: 2,
+        include_metadata: false,
+        max_entries: 10,
+        time_budget: Duration::from_secs(5),
+    }
+}
+
 #[test]
 fn recent_enumeration_honors_a_zero_time_budget() {
     let events = run_enumerate(DirectoryRequest {
