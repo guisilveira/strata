@@ -131,3 +131,46 @@ fn delete_actions_follow_location_and_resolved_capabilities() {
         );
     }
 }
+
+#[test]
+fn agents_run_in_the_folder_that_holds_the_selection() {
+    let entry = |path: &str, kind| FileEntry {
+        location: Location::local(path),
+        native_name: path.rsplit('/').next().unwrap_or(path).into(),
+        thumbnail_path: None,
+        display_name: path.rsplit('/').next().unwrap_or(path).into(),
+        kind,
+        size: crate::model::MetadataValue::Unknown,
+        modified_unix_seconds: crate::model::MetadataValue::Unknown,
+        recent_unix_seconds: crate::model::MetadataValue::Unknown,
+        is_hidden: false,
+        mode: crate::model::MetadataValue::Unknown,
+        image_dimensions: crate::model::MetadataValue::Unknown,
+        child_count: crate::model::MetadataValue::Unknown,
+        duration_seconds: crate::model::MetadataValue::Unknown,
+    };
+    let file = |path: &str| entry(path, crate::model::EntryKind::File);
+    let folder = |path: &str| entry(path, crate::model::EntryKind::Directory);
+    let path_of = |location: Option<Location>| {
+        location.map(|location| location.diagnostic_path().to_string())
+    };
+
+    // A lone folder is somewhere to work in; a file is not.
+    assert_eq!(
+        path_of(agent_entries_location(&[folder("/fixture/project")])),
+        Some("/fixture/project".to_string())
+    );
+    assert_eq!(
+        path_of(agent_entries_location(&[file("/fixture/project/main.rs")])),
+        Some("/fixture/project".to_string())
+    );
+    // Several selected paths run the agent where they live, not inside one.
+    assert_eq!(
+        path_of(agent_entries_location(&[
+            folder("/fixture/project/src"),
+            file("/fixture/project/Cargo.toml"),
+        ])),
+        Some("/fixture/project".to_string())
+    );
+    assert_eq!(path_of(agent_entries_location(&[])), None);
+}
