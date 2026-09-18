@@ -36,7 +36,7 @@ enum SessionKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SpawnProgress {
     Pending,
-    ExitSeen,
+    ExitSeen(i32),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,7 +68,9 @@ enum SessionState {
         kind: SessionKind,
         pid: ChildPid,
     },
-    ExitedAgentOutput,
+    ExitedAgentOutput {
+        status: i32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -76,6 +78,7 @@ enum SpawnCompletion {
     Running,
     Terminate(ChildPid),
     TerminateAndBecomeIdle(ChildPid),
+    AgentCompleted(i32),
     BecomeIdle,
     Stale(Option<ChildPid>),
 }
@@ -205,14 +208,25 @@ impl SessionLifecycle {
             }
             (
                 SessionState::Spawning {
-                    progress: SpawnProgress::ExitSeen,
+                    kind: SessionKind::Agent,
+                    progress: SpawnProgress::ExitSeen(status),
+                    ..
+                },
+                Ok(_pid),
+            ) => {
+                self.state = SessionState::ExitedAgentOutput { status };
+                SpawnCompletion::AgentCompleted(status)
+            }
+            (
+                SessionState::Spawning {
+                    progress: SpawnProgress::ExitSeen(_),
                     ..
                 },
                 Ok(pid),
             )
             | (
                 SessionState::Cancelling {
-                    progress: CancellationProgress::Waiting(SpawnProgress::ExitSeen),
+                    progress: CancellationProgress::Waiting(SpawnProgress::ExitSeen(_)),
                     ..
                 },
                 Ok(pid),
@@ -254,7 +268,7 @@ impl SessionLifecycle {
                 kind: SessionKind::Agent,
                 ..
             } => {
-                self.state = SessionState::ExitedAgentOutput;
+                self.state = SessionState::ExitedAgentOutput { status };
                 ChildExit::AgentCompleted(status)
             }
             SessionState::Running { .. } | SessionState::Stopping { .. } => {
@@ -269,7 +283,7 @@ impl SessionLifecycle {
                 self.state = SessionState::Spawning {
                     generation,
                     kind,
-                    progress: SpawnProgress::ExitSeen,
+                    progress: SpawnProgress::ExitSeen(status),
                 };
                 ChildExit::Recorded
             }
@@ -288,25 +302,25 @@ impl SessionLifecycle {
                 self.state = SessionState::Cancelling {
                     generation,
                     kind,
-                    progress: CancellationProgress::Waiting(SpawnProgress::ExitSeen),
+                    progress: CancellationProgress::Waiting(SpawnProgress::ExitSeen(status)),
                 };
                 ChildExit::Recorded
             }
             SessionState::Idle
             | SessionState::Spawning {
-                progress: SpawnProgress::ExitSeen,
+                progress: SpawnProgress::ExitSeen(_),
                 ..
             }
             | SessionState::Cancelling {
-                progress: CancellationProgress::Waiting(SpawnProgress::ExitSeen),
+                progress: CancellationProgress::Waiting(SpawnProgress::ExitSeen(_)),
                 ..
             }
-            | SessionState::ExitedAgentOutput => ChildExit::Ignored,
+            | SessionState::ExitedAgentOutput { .. } => ChildExit::Ignored,
         }
     }
 
     fn discard_completed_output(&mut self) {
-        if matches!(self.state, SessionState::ExitedAgentOutput) {
+        if matches!(self.state, SessionState::ExitedAgentOutput { .. }) {
             self.state = SessionState::Idle;
         }
     }
@@ -604,6 +618,10 @@ impl TerminalPanel {
                 self.clear_spawn_cancellable(generation);
                 terminate(pid);
                 self.state.widget.set_visible(false);
+            }
+            SpawnCompletion::AgentCompleted(status) => {
+                self.clear_spawn_cancellable(generation);
+                self.state.terminal.feed(exit_notice(status).as_bytes());
             }
             SpawnCompletion::BecomeIdle => {
                 self.clear_spawn_cancellable(generation);

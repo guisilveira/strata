@@ -351,6 +351,24 @@ fn exit_before_spawn_callback_does_not_deadlock_cancellation() {
 }
 
 #[test]
+fn early_natural_shell_exit_returns_to_idle_after_spawn_callback() {
+    let mut lifecycle = SessionLifecycle::default();
+    let generation = lifecycle
+        .request_spawn_kind(SessionKind::Shell)
+        .expect("shell spawn generation");
+
+    assert_eq!(
+        lifecycle.child_exited_with_status(7 << 8),
+        ChildExit::Recorded
+    );
+    assert_eq!(
+        lifecycle.complete_spawn(generation, Ok(59)),
+        SpawnCompletion::TerminateAndBecomeIdle(59)
+    );
+    assert!(matches!(lifecycle.state(), SessionState::Idle));
+}
+
+#[test]
 fn natural_shell_exit_returns_a_running_session_to_idle() {
     let mut lifecycle = SessionLifecycle::default();
     let generation = lifecycle.request_spawn().expect("spawn generation");
@@ -398,7 +416,46 @@ fn natural_agent_exit_retains_output_until_explicit_discard() {
         lifecycle.child_exited_with_status(7 << 8),
         ChildExit::AgentCompleted(7 << 8)
     );
-    assert!(matches!(lifecycle.state(), SessionState::ExitedAgentOutput));
+    assert!(matches!(
+        lifecycle.state(),
+        SessionState::ExitedAgentOutput { status } if *status == 7 << 8
+    ));
+    assert_eq!(lifecycle.request_spawn(), None);
+
+    lifecycle.discard_completed_output();
+    assert!(matches!(lifecycle.state(), SessionState::Idle));
+    assert!(lifecycle.request_spawn().is_some());
+}
+
+#[test]
+fn early_agent_exit_before_spawn_callback_retains_output_and_status() {
+    let mut lifecycle = SessionLifecycle::default();
+    let generation = lifecycle
+        .request_spawn_kind(SessionKind::Agent)
+        .expect("agent spawn generation");
+    let status = 7 << 8;
+
+    assert_eq!(
+        lifecycle.child_exited_with_status(status),
+        ChildExit::Recorded
+    );
+    assert!(matches!(
+        lifecycle.state(),
+        SessionState::Spawning {
+            generation: active,
+            kind: SessionKind::Agent,
+            progress: SpawnProgress::ExitSeen(actual),
+        } if *active == generation && *actual == status
+    ));
+
+    assert_eq!(
+        lifecycle.complete_spawn(generation, Ok(31)),
+        SpawnCompletion::AgentCompleted(status)
+    );
+    assert!(matches!(
+        lifecycle.state(),
+        SessionState::ExitedAgentOutput { status: actual } if *actual == status
+    ));
     assert_eq!(lifecycle.request_spawn(), None);
 
     lifecycle.discard_completed_output();
@@ -450,4 +507,32 @@ fn agent_pending_spawn_uses_generic_cancellation_and_late_child_drain() {
         }
     ));
     assert_eq!(lifecycle.child_exited(), ChildExit::BecameIdle);
+}
+
+#[test]
+fn cancelled_agent_exit_seen_before_callback_never_retains_output() {
+    let mut lifecycle = SessionLifecycle::default();
+    let generation = lifecycle
+        .request_spawn_kind(SessionKind::Agent)
+        .expect("agent spawn generation");
+    let status = 7 << 8;
+
+    assert_eq!(lifecycle.cancel_pending_spawn(), Some(generation));
+    assert_eq!(
+        lifecycle.child_exited_with_status(status),
+        ChildExit::Recorded
+    );
+    assert!(matches!(
+        lifecycle.state(),
+        SessionState::Cancelling {
+            kind: SessionKind::Agent,
+            progress: CancellationProgress::Waiting(SpawnProgress::ExitSeen(actual)),
+            ..
+        } if *actual == status
+    ));
+    assert_eq!(
+        lifecycle.complete_spawn(generation, Ok(43)),
+        SpawnCompletion::TerminateAndBecomeIdle(43)
+    );
+    assert!(matches!(lifecycle.state(), SessionState::Idle));
 }
