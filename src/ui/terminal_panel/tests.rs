@@ -2,7 +2,10 @@
 
 use std::collections::HashSet;
 
-use super::{SourcePalette, ThemeTokens, ansi_palette};
+use super::{
+    CancellationProgress, ChildExit, SessionLifecycle, SessionState, SourcePalette,
+    SpawnCompletion, SpawnProgress, ThemeTokens, ansi_palette,
+};
 
 fn tokens() -> ThemeTokens {
     ThemeTokens {
@@ -69,4 +72,177 @@ fn the_panel_releases_its_state_when_dropped() {
             );
         },
     );
+}
+
+#[test]
+fn pending_spawn_cannot_be_restarted_by_a_second_reveal() {
+    let mut lifecycle = SessionLifecycle::default();
+
+    let generation = lifecycle
+        .request_spawn()
+        .expect("first reveal starts a spawn");
+
+    assert_eq!(lifecycle.request_spawn(), None);
+    assert!(matches!(
+        lifecycle.state(),
+        SessionState::Spawning {
+            generation: active,
+            progress: SpawnProgress::Pending
+        } if *active == generation
+    ));
+}
+
+#[test]
+fn cancelling_pending_spawn_terminates_a_late_child_before_draining_it() {
+    let mut lifecycle = SessionLifecycle::default();
+    let generation = lifecycle.request_spawn().expect("spawn generation");
+
+    assert_eq!(lifecycle.cancel_pending_spawn(), Some(generation));
+    assert_eq!(
+        lifecycle.complete_spawn(generation, Ok(41)),
+        SpawnCompletion::Terminate(41)
+    );
+    assert!(matches!(
+        lifecycle.state(),
+        SessionState::Cancelling {
+            generation: active,
+            progress: CancellationProgress::Child(41)
+        } if *active == generation
+    ));
+    assert_eq!(lifecycle.child_exited(), ChildExit::BecameIdle);
+}
+
+#[test]
+fn stopping_session_blocks_a_new_spawn_until_exit_is_drained() {
+    let mut lifecycle = SessionLifecycle::default();
+    let first = lifecycle.request_spawn().expect("first spawn generation");
+    assert_eq!(
+        lifecycle.complete_spawn(first, Ok(11)),
+        SpawnCompletion::Running
+    );
+
+    assert_eq!(lifecycle.stop_running(), Some(11));
+    assert_eq!(lifecycle.request_spawn(), None);
+    assert_eq!(lifecycle.child_exited(), ChildExit::BecameIdle);
+    assert!(lifecycle.request_spawn().is_some());
+}
+
+#[test]
+fn stale_spawn_callback_cannot_replace_a_newer_generation() {
+    let mut lifecycle = SessionLifecycle::default();
+    let stale = lifecycle.request_spawn().expect("stale generation");
+    assert_eq!(lifecycle.cancel_pending_spawn(), Some(stale));
+    assert_eq!(
+        lifecycle.complete_spawn(stale, Err(())),
+        SpawnCompletion::BecomeIdle
+    );
+    let current = lifecycle.request_spawn().expect("current generation");
+
+    assert_eq!(
+        lifecycle.complete_spawn(stale, Ok(73)),
+        SpawnCompletion::Stale(Some(73))
+    );
+    assert!(matches!(
+        lifecycle.state(),
+        SessionState::Spawning {
+            generation: active,
+            progress: SpawnProgress::Pending
+        } if *active == current
+    ));
+}
+
+#[test]
+fn stale_spawn_failure_cannot_clear_a_newer_generation() {
+    let mut lifecycle = SessionLifecycle::default();
+    let stale = lifecycle.request_spawn().expect("stale generation");
+    lifecycle.cancel_pending_spawn();
+    assert_eq!(
+        lifecycle.complete_spawn(stale, Err(())),
+        SpawnCompletion::BecomeIdle
+    );
+    let current = lifecycle.request_spawn().expect("current generation");
+
+    assert_eq!(
+        lifecycle.complete_spawn(stale, Err(())),
+        SpawnCompletion::Stale(None)
+    );
+    assert!(matches!(
+        lifecycle.state(),
+        SessionState::Spawning {
+            generation: active,
+            progress: SpawnProgress::Pending
+        } if *active == current
+    ));
+}
+
+#[test]
+fn current_spawn_failure_returns_to_idle_and_allows_a_retry() {
+    let mut lifecycle = SessionLifecycle::default();
+    let failed = lifecycle.request_spawn().expect("failed generation");
+
+    assert_eq!(
+        lifecycle.complete_spawn(failed, Err(())),
+        SpawnCompletion::BecomeIdle
+    );
+    assert!(lifecycle.request_spawn().is_some());
+}
+
+#[test]
+fn cancelling_spawn_without_a_child_returns_to_idle_on_failure() {
+    let mut lifecycle = SessionLifecycle::default();
+    let generation = lifecycle.request_spawn().expect("spawn generation");
+    lifecycle.cancel_pending_spawn();
+
+    assert_eq!(
+        lifecycle.complete_spawn(generation, Err(())),
+        SpawnCompletion::BecomeIdle
+    );
+    assert!(matches!(lifecycle.state(), SessionState::Idle));
+    assert!(lifecycle.request_spawn().is_some());
+}
+
+#[test]
+fn exit_before_spawn_callback_does_not_deadlock_cancellation() {
+    let mut lifecycle = SessionLifecycle::default();
+    let generation = lifecycle.request_spawn().expect("spawn generation");
+    lifecycle.cancel_pending_spawn();
+
+    assert_eq!(lifecycle.child_exited(), ChildExit::Recorded);
+    assert_eq!(
+        lifecycle.complete_spawn(generation, Ok(59)),
+        SpawnCompletion::TerminateAndBecomeIdle(59)
+    );
+    assert!(matches!(lifecycle.state(), SessionState::Idle));
+}
+
+#[test]
+fn natural_shell_exit_returns_a_running_session_to_idle() {
+    let mut lifecycle = SessionLifecycle::default();
+    let generation = lifecycle.request_spawn().expect("spawn generation");
+    assert_eq!(
+        lifecycle.complete_spawn(generation, Ok(17)),
+        SpawnCompletion::Running
+    );
+
+    assert_eq!(lifecycle.child_exited(), ChildExit::BecameIdle);
+    assert!(matches!(lifecycle.state(), SessionState::Idle));
+}
+
+#[test]
+fn hiding_and_showing_running_session_keeps_the_same_generation() {
+    let mut lifecycle = SessionLifecycle::default();
+    let generation = lifecycle.request_spawn().expect("spawn generation");
+    assert_eq!(
+        lifecycle.complete_spawn(generation, Ok(23)),
+        SpawnCompletion::Running
+    );
+
+    assert_eq!(lifecycle.request_spawn(), None);
+    assert!(matches!(
+        lifecycle.state(),
+        SessionState::Running {
+            generation: active,
+            pid: 23
+        } if *active == generation
+    ));
 }
