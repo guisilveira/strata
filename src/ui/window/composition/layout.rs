@@ -108,6 +108,7 @@ pub(super) fn terminal_panel(
     browser.set_agent_handler(Rc::new(move |request| {
         let argv = crate::ui::terminal_panel::agent_argv(
             &agent_preferences.agent_command(),
+            &request.directory,
             &request.paths,
         )?;
         agent_panel.run_agent(argv, request.directory)

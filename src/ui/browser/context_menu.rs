@@ -470,6 +470,7 @@ pub(in crate::ui) fn install_folder_context_menu(
         }));
         select_all.set_sensitive(has_entries());
         open_terminal.set_sensitive(can_open_terminal(&location_for_trigger));
+        open_agent.set_visible(directory_actions && agent_is_configured());
         open_agent.set_sensitive(can_open_terminal(&location_for_trigger));
         let hidden_files_shown = browser_for_trigger.preferences().show_hidden;
         toggle_hidden_label.set_text(if hidden_files_shown {
@@ -968,10 +969,13 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
             let Some(location) = agent_entries_location(&entries) else {
                 return;
             };
-            let paths = entries
-                .iter()
-                .filter_map(|entry| entry.location.native_path().map(Path::to_path_buf))
-                .collect();
+            let paths = match agent_entry_paths(&entries) {
+                Ok(paths) => paths,
+                Err(message) => {
+                    show_error_dialog(&state.overlay, "Unable to start the agent", &message);
+                    return;
+                }
+            };
             start_agent(&state, &location, paths);
         });
     }
@@ -1855,6 +1859,22 @@ fn agent_entries_location(entries: &[FileEntry]) -> Option<Location> {
     }
     let parent = entry.location.parent()?;
     can_open_terminal(&parent).then_some(parent)
+}
+
+fn agent_entry_paths(entries: &[FileEntry]) -> Result<Vec<std::path::PathBuf>, String> {
+    entries
+        .iter()
+        .map(|entry| {
+            entry
+                .location
+                .native_path()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| {
+                    "Every selected entry must have a local path before the agent can be started."
+                        .to_string()
+                })
+        })
+        .collect()
 }
 
 fn start_agent(state: &Rc<ViewState>, location: &Location, paths: Vec<std::path::PathBuf>) {

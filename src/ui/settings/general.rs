@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 
-use std::{cell::Cell, rc::Rc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::Duration,
+};
 
 use gtk::glib;
 use gtk::prelude::*;
@@ -185,26 +189,29 @@ fn append_agent_option(content: &gtk::Box, manager: &Rc<ThemeManager>) {
     content.append(&row);
 
     let saved_notice = Rc::new(Cell::new(0u32));
+    let last_saved = Rc::new(RefCell::new(manager.agent_command()));
     let show_pending = {
         let status = status.clone();
         let manager = manager.clone();
         let saved_notice = saved_notice.clone();
         move |entry: &gtk::Entry| {
-            if entry.text().trim() == manager.agent_command() {
+            if entry.text() == manager.agent_command() {
+                clear_agent_command_feedback(&status, &saved_notice);
                 return;
             }
-            saved_notice.set(saved_notice.get().wrapping_add(1));
-            status.remove_css_class("saved");
-            status.set_text("Press Enter to save");
+            show_agent_command_pending_feedback(&status, &saved_notice);
         }
     };
     let commit = {
         let status = status.clone();
         let manager = manager.clone();
         let saved_notice = saved_notice.clone();
+        let last_saved = last_saved.clone();
         move |entry: &gtk::Entry| {
             manager.set_agent_command(&entry.text());
-            entry.set_text(&manager.agent_command());
+            let saved = manager.agent_command();
+            last_saved.replace(saved.clone());
+            entry.set_text(&saved);
             status.add_css_class("saved");
             status.set_text("Saved");
             let generation = saved_notice.get().wrapping_add(1);
@@ -222,18 +229,36 @@ fn append_agent_option(content: &gtk::Box, manager: &Rc<ThemeManager>) {
     entry.connect_changed(show_pending);
     let activated = commit.clone();
     entry.connect_activate(move |entry| activated(entry));
-    let focus = gtk::EventControllerFocus::new();
-    let leaving_entry = entry.clone();
-    focus.connect_leave(move |_| commit(&leaving_entry));
-    entry.add_controller(focus);
 
-    manager.bind_preference(&entry, ThemeManager::agent_command, |widget, value| {
-        if let Some(entry) = widget.downcast_ref::<gtk::Entry>()
-            && entry.text() != value
-        {
-            entry.set_text(&value);
+    let status_for_binding = status.clone();
+    let saved_notice_for_binding = saved_notice.clone();
+    let last_saved_for_binding = last_saved.clone();
+    manager.bind_preference(&entry, ThemeManager::agent_command, move |widget, value| {
+        if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
+            let text = entry.text();
+            let was_clean = text == *last_saved_for_binding.borrow();
+            last_saved_for_binding.replace(value.clone());
+            if text == value {
+                clear_agent_command_feedback(&status_for_binding, &saved_notice_for_binding);
+            } else if was_clean {
+                entry.set_text(&value);
+            } else {
+                show_agent_command_pending_feedback(&status_for_binding, &saved_notice_for_binding);
+            }
         }
     });
+}
+
+fn show_agent_command_pending_feedback(status: &gtk::Label, saved_notice: &Cell<u32>) {
+    saved_notice.set(saved_notice.get().wrapping_add(1));
+    status.remove_css_class("saved");
+    status.set_text("Press Enter to save");
+}
+
+fn clear_agent_command_feedback(status: &gtk::Label, saved_notice: &Cell<u32>) {
+    saved_notice.set(saved_notice.get().wrapping_add(1));
+    status.remove_css_class("saved");
+    status.set_text("");
 }
 
 fn append_default_directory_option(content: &gtk::Box, manager: &Rc<ThemeManager>) {

@@ -174,3 +174,33 @@ fn agents_run_in_the_folder_that_holds_the_selection() {
     );
     assert_eq!(path_of(agent_entries_location(&[])), None);
 }
+
+#[test]
+fn agent_selection_is_atomic_when_one_path_is_not_native() {
+    let file = |location: Location| FileEntry {
+        native_name: "entry".into(),
+        thumbnail_path: None,
+        display_name: "entry".into(),
+        kind: crate::model::EntryKind::File,
+        location,
+        size: crate::model::MetadataValue::Unknown,
+        modified_unix_seconds: crate::model::MetadataValue::Unknown,
+        recent_unix_seconds: crate::model::MetadataValue::Unknown,
+        is_hidden: false,
+        mode: crate::model::MetadataValue::Unknown,
+        image_dimensions: crate::model::MetadataValue::Unknown,
+        child_count: crate::model::MetadataValue::Unknown,
+        duration_seconds: crate::model::MetadataValue::Unknown,
+    };
+    let local = file(Location::local("/fixture/project/local.txt"));
+    let remote = file(Location::uri("sftp://host/project/remote.txt"));
+
+    assert_eq!(
+        agent_entry_paths(std::slice::from_ref(&local))
+            .expect("native selection")
+            .len(),
+        1
+    );
+    let error = agent_entry_paths(&[local, remote]).expect_err("mixed selection");
+    assert!(error.contains("Every selected entry"), "{error}");
+}

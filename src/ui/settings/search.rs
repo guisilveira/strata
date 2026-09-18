@@ -21,7 +21,7 @@ const TARGETS: &[Target] = &[
         id: "agent-command",
         page: "general",
         title: "AI agent command",
-        aliases: "terminal embedded agent cli claude codex gemini command",
+        aliases: "terminal embedded agent cli command shell",
     },
     Target {
         id: "peeking",
