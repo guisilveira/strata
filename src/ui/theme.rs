@@ -60,6 +60,16 @@ pub struct ThemeTokens {
     pub highlight: String,
     pub border: String,
     pub dim_text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_keyword: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_string: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_constant: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_preprocessor: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1105,9 +1115,15 @@ impl ThemeManager {
     /// readable as syntax highlighting but collapses the ANSI palette a
     /// terminal needs to keep distinct.
     pub(super) fn appearance_source_palette(&self) -> Option<SourcePalette> {
-        self.follows_omarchy()
-            .then(load_omarchy_source_palette)
-            .flatten()
+        if self.follows_omarchy()
+            && let Some(palette) = load_omarchy_source_palette()
+        {
+            return Some(palette);
+        }
+        let tokens = self.appearance_tokens();
+        tokens
+            .defines_syntax_colors()
+            .then(|| resolved_source_palette(&tokens, None))
     }
 
     pub fn starter_tokens(&self) -> ThemeTokens {
@@ -1327,6 +1343,11 @@ fn azure_tokens() -> ThemeTokens {
             highlight: "#244d68".to_owned(),
             border: "#315b75".to_owned(),
             dim_text: "#6f8da3".to_owned(),
+            syntax_keyword: None,
+            syntax_string: None,
+            syntax_constant: None,
+            syntax_type: None,
+            syntax_preprocessor: None,
         })
 }
 
@@ -1472,6 +1493,11 @@ fn tokens_from_quattro(name: &str, source: &str) -> Option<ThemeTokens> {
         text,
         accent,
         danger: get("color1").unwrap_or_else(default_danger),
+        syntax_keyword: get("magenta").or_else(|| get("color5")),
+        syntax_string: get("green").or_else(|| get("color2")),
+        syntax_constant: get("orange").or_else(|| get("color9")),
+        syntax_type: get("cyan").or_else(|| get("color3")),
+        syntax_preprocessor: get("yellow"),
     })
 }
 
@@ -1505,7 +1531,19 @@ fn validate_tokens(tokens: &ThemeTokens) -> Result<(), &'static str> {
         &tokens.highlight,
         &tokens.border,
         &tokens.dim_text,
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        [
+            tokens.syntax_keyword.as_ref(),
+            tokens.syntax_string.as_ref(),
+            tokens.syntax_constant.as_ref(),
+            tokens.syntax_type.as_ref(),
+            tokens.syntax_preprocessor.as_ref(),
+        ]
+        .into_iter()
+        .flatten(),
+    ) {
         if gdk::RGBA::parse(color).is_err() {
             return Err("Every color must be a valid CSS color");
         }
@@ -1689,21 +1727,58 @@ fn ensure_source_style_scheme_installed() {
     });
 }
 
-/// Themes that carry no syntax colors of their own get a spread derived from
-/// the accent, so every theme still has a full palette.
-fn fallback_source_palette(tokens: &ThemeTokens) -> SourcePalette {
-    SourcePalette {
+fn resolved_source_palette(tokens: &ThemeTokens, palette: Option<&SourcePalette>) -> SourcePalette {
+    let fallback = SourcePalette {
         statement: tokens.accent.clone(),
         string: blend(&tokens.accent, &tokens.text, 0.48),
         constant: blend(&tokens.accent, &tokens.text, 0.18),
         type_color: blend(&tokens.accent, &tokens.text, 0.24),
         preprocessor: blend(&tokens.accent, &tokens.text, 0.32),
+    };
+    let palette = palette.unwrap_or(&fallback);
+    let resolve = |token: &Option<String>, fallback: &str| {
+        token
+            .as_deref()
+            .filter(|value| gdk::RGBA::parse(*value).is_ok())
+            .unwrap_or(fallback)
+            .to_owned()
+    };
+    SourcePalette {
+        statement: resolve(&tokens.syntax_keyword, &palette.statement),
+        string: resolve(&tokens.syntax_string, &palette.string),
+        constant: resolve(&tokens.syntax_constant, &palette.constant),
+        type_color: resolve(&tokens.syntax_type, &palette.type_color),
+        preprocessor: resolve(&tokens.syntax_preprocessor, &palette.preprocessor),
+    }
+}
+
+impl ThemeTokens {
+    /// Whether the theme names its own syntax colors rather than leaning on the
+    /// accent-derived spread, which collapses the hues a terminal needs apart.
+    pub(super) fn defines_syntax_colors(&self) -> bool {
+        [
+            &self.syntax_keyword,
+            &self.syntax_string,
+            &self.syntax_constant,
+            &self.syntax_type,
+            &self.syntax_preprocessor,
+        ]
+        .iter()
+        .all(|token| token.is_some())
+    }
+
+    pub(super) fn initialize_syntax_colors(&mut self) {
+        let palette = resolved_source_palette(self, None);
+        self.syntax_keyword = Some(palette.statement);
+        self.syntax_string = Some(palette.string);
+        self.syntax_constant = Some(palette.constant);
+        self.syntax_type = Some(palette.type_color);
+        self.syntax_preprocessor = Some(palette.preprocessor);
     }
 }
 
 fn source_style_scheme_xml(tokens: &ThemeTokens, palette: Option<&SourcePalette>) -> String {
-    let fallback = fallback_source_palette(tokens);
-    let palette = palette.unwrap_or(&fallback);
+    let palette = resolved_source_palette(tokens, palette);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <style-scheme id="strata-current" _name="Strata Current Theme" version="1.0">
