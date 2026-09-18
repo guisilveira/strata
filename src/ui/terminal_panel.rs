@@ -6,7 +6,7 @@ use std::{
     rc::Rc,
 };
 
-use gtk::{gdk, glib, pango, prelude::*};
+use gtk::{gdk, gio, glib, pango, prelude::*};
 use vte4::prelude::*;
 
 use crate::assets::{self, icons};
@@ -22,6 +22,234 @@ const UNAVAILABLE: &str =
 const BRIGHT_MIX: f64 = 0.35;
 
 type DirectorySource = Rc<dyn Fn() -> Option<PathBuf>>;
+type ChildPid = i32;
+type Generation = u64;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SpawnProgress {
+    Pending,
+    ExitSeen,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CancellationProgress {
+    Waiting(SpawnProgress),
+    Child(ChildPid),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionState {
+    Idle,
+    Spawning {
+        generation: Generation,
+        progress: SpawnProgress,
+    },
+    Running {
+        generation: Generation,
+        pid: ChildPid,
+    },
+    Cancelling {
+        generation: Generation,
+        progress: CancellationProgress,
+    },
+    Stopping {
+        generation: Generation,
+        pid: ChildPid,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SpawnCompletion {
+    Running,
+    Terminate(ChildPid),
+    TerminateAndBecomeIdle(ChildPid),
+    BecomeIdle,
+    Stale(Option<ChildPid>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChildExit {
+    Recorded,
+    BecameIdle,
+    Ignored,
+}
+
+// VTE's child-exited signal has no PID, so the lifecycle must drain each
+// session before allowing a later generation to start.
+struct SessionLifecycle {
+    state: SessionState,
+    next_generation: Generation,
+}
+
+impl Default for SessionLifecycle {
+    fn default() -> Self {
+        Self {
+            state: SessionState::Idle,
+            next_generation: 0,
+        }
+    }
+}
+
+impl SessionLifecycle {
+    #[cfg(test)]
+    fn state(&self) -> &SessionState {
+        &self.state
+    }
+
+    fn is_idle(&self) -> bool {
+        matches!(self.state, SessionState::Idle)
+    }
+
+    fn request_spawn(&mut self) -> Option<Generation> {
+        if !matches!(self.state, SessionState::Idle) {
+            return None;
+        }
+        let generation = self.next_generation.wrapping_add(1);
+        self.next_generation = generation;
+        self.state = SessionState::Spawning {
+            generation,
+            progress: SpawnProgress::Pending,
+        };
+        Some(generation)
+    }
+
+    fn cancel_pending_spawn(&mut self) -> Option<Generation> {
+        let SessionState::Spawning {
+            generation,
+            progress,
+        } = self.state
+        else {
+            return None;
+        };
+        self.state = SessionState::Cancelling {
+            generation,
+            progress: CancellationProgress::Waiting(progress),
+        };
+        Some(generation)
+    }
+
+    fn stop_running(&mut self) -> Option<ChildPid> {
+        let SessionState::Running { generation, pid } = self.state else {
+            return None;
+        };
+        self.state = SessionState::Stopping { generation, pid };
+        Some(pid)
+    }
+
+    fn complete_spawn(
+        &mut self,
+        generation: Generation,
+        result: Result<ChildPid, ()>,
+    ) -> SpawnCompletion {
+        let current = matches!(
+            self.state,
+            SessionState::Spawning {
+                generation: active,
+                ..
+            }
+                | SessionState::Cancelling {
+                    generation: active,
+                    ..
+                } if active == generation
+        );
+        if !current {
+            return SpawnCompletion::Stale(result.ok());
+        }
+
+        match (self.state, result) {
+            (
+                SessionState::Spawning {
+                    progress: SpawnProgress::Pending,
+                    ..
+                },
+                Ok(pid),
+            ) => {
+                self.state = SessionState::Running { generation, pid };
+                SpawnCompletion::Running
+            }
+            (
+                SessionState::Spawning {
+                    progress: SpawnProgress::ExitSeen,
+                    ..
+                },
+                Ok(pid),
+            )
+            | (
+                SessionState::Cancelling {
+                    progress: CancellationProgress::Waiting(SpawnProgress::ExitSeen),
+                    ..
+                },
+                Ok(pid),
+            ) => {
+                self.state = SessionState::Idle;
+                SpawnCompletion::TerminateAndBecomeIdle(pid)
+            }
+            (
+                SessionState::Cancelling {
+                    progress: CancellationProgress::Waiting(SpawnProgress::Pending),
+                    ..
+                },
+                Ok(pid),
+            ) => {
+                self.state = SessionState::Cancelling {
+                    generation,
+                    progress: CancellationProgress::Child(pid),
+                };
+                SpawnCompletion::Terminate(pid)
+            }
+            (_, Err(())) => {
+                self.state = SessionState::Idle;
+                SpawnCompletion::BecomeIdle
+            }
+            _ => SpawnCompletion::Stale(result.ok()),
+        }
+    }
+
+    fn child_exited(&mut self) -> ChildExit {
+        match self.state {
+            SessionState::Running { .. } | SessionState::Stopping { .. } => {
+                self.state = SessionState::Idle;
+                ChildExit::BecameIdle
+            }
+            SessionState::Spawning {
+                generation,
+                progress: SpawnProgress::Pending,
+            } => {
+                self.state = SessionState::Spawning {
+                    generation,
+                    progress: SpawnProgress::ExitSeen,
+                };
+                ChildExit::Recorded
+            }
+            SessionState::Cancelling {
+                progress: CancellationProgress::Child(_),
+                ..
+            } => {
+                self.state = SessionState::Idle;
+                ChildExit::BecameIdle
+            }
+            SessionState::Cancelling {
+                generation,
+                progress: CancellationProgress::Waiting(SpawnProgress::Pending),
+            } => {
+                self.state = SessionState::Cancelling {
+                    generation,
+                    progress: CancellationProgress::Waiting(SpawnProgress::ExitSeen),
+                };
+                ChildExit::Recorded
+            }
+            SessionState::Idle
+            | SessionState::Spawning {
+                progress: SpawnProgress::ExitSeen,
+                ..
+            }
+            | SessionState::Cancelling {
+                progress: CancellationProgress::Waiting(SpawnProgress::ExitSeen),
+                ..
+            } => ChildExit::Ignored,
+        }
+    }
+}
 
 /// Window-scoped embedded terminal. The shell is spawned on first reveal and
 /// outlives hiding, navigation, and the folder it started in.
@@ -35,7 +263,8 @@ struct PanelState {
     terminal: vte4::Terminal,
     split: RefCell<Option<gtk::Paned>>,
     directory: DirectorySource,
-    child: Cell<Option<glib::Pid>>,
+    lifecycle: RefCell<SessionLifecycle>,
+    spawn_cancellable: RefCell<Option<(Generation, gio::Cancellable)>>,
     sized: Cell<bool>,
 }
 
@@ -58,7 +287,8 @@ impl TerminalPanel {
             terminal,
             split: RefCell::new(None),
             directory,
-            child: Cell::new(None),
+            lifecycle: RefCell::new(SessionLifecycle::default()),
+            spawn_cancellable: RefCell::new(None),
             sized: Cell::new(false),
         });
         let panel = Self { state };
@@ -85,7 +315,7 @@ impl TerminalPanel {
 
     #[cfg(test)]
     pub(super) fn has_session(&self) -> bool {
-        self.state.child.get().is_some()
+        !self.state.lifecycle.borrow().is_idle()
     }
 
     pub(super) fn is_visible(&self) -> bool {
@@ -113,16 +343,31 @@ impl TerminalPanel {
     }
 
     /// Ends the shell and hides the panel. The next reveal starts a fresh
-    /// session in whatever folder is active then.
+    /// session in whatever folder is active after the old one has exited.
     pub(super) fn close_session(&self) {
         self.shutdown();
         self.state.widget.set_visible(false);
     }
 
-    /// Ends the shell. VTE frees the PTY with the widget, and detaching it
-    /// here instead would tear it out from under the still-running child.
+    /// Requests the shell to end while retaining lifecycle ownership until VTE
+    /// reports that its child has exited.
     pub(super) fn shutdown(&self) {
-        if let Some(pid) = self.state.child.take() {
+        let pending = { self.state.lifecycle.borrow_mut().cancel_pending_spawn() };
+        if let Some(generation) = pending {
+            let cancellable = self
+                .state
+                .spawn_cancellable
+                .borrow()
+                .as_ref()
+                .filter(|(active, _)| *active == generation)
+                .map(|(_, cancellable)| cancellable.clone());
+            if let Some(cancellable) = cancellable {
+                cancellable.cancel();
+            }
+            return;
+        }
+        let running = { self.state.lifecycle.borrow_mut().stop_running() };
+        if let Some(pid) = running {
             terminate(pid);
         }
     }
@@ -186,11 +431,9 @@ impl TerminalPanel {
     }
 
     fn spawn_if_needed(&self) {
-        if self.state.child.get().is_some() {
+        if !self.state.lifecycle.borrow().is_idle() {
             return;
         }
-        // A replacement session must not open onto the dead one's scrollback.
-        self.state.terminal.reset(true, true);
         // VTE inherits Strata's own working directory when it is given none,
         // which would silently open Trash or a remote location in whatever
         // directory Strata happens to be running from.
@@ -200,9 +443,19 @@ impl TerminalPanel {
             self.state.terminal.feed(UNAVAILABLE.as_bytes());
             return;
         };
+        let Some(generation) = self.state.lifecycle.borrow_mut().request_spawn() else {
+            return;
+        };
+        // A replacement session must not open onto the dead one's scrollback.
+        self.state.terminal.reset(true, true);
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let weak = Rc::downgrade(&self.state);
         let failed_shell = shell.clone();
+        let cancellable = gio::Cancellable::new();
+        self.state
+            .spawn_cancellable
+            .borrow_mut()
+            .replace((generation, cancellable.clone()));
         self.state.terminal.spawn_async(
             vte4::PtyFlags::DEFAULT,
             Some(directory.as_str()),
@@ -211,30 +464,80 @@ impl TerminalPanel {
             glib::SpawnFlags::DEFAULT,
             || {},
             -1,
-            None::<&gtk::gio::Cancellable>,
+            Some(&cancellable),
             move |result| {
                 let Some(state) = weak.upgrade() else {
+                    if let Ok(pid) = result {
+                        terminate(pid.0);
+                    }
                     return;
                 };
-                match result {
-                    Ok(pid) => state.child.set(Some(pid)),
-                    Err(error) => {
-                        tracing::warn!(%error, shell = %failed_shell, "unable to start embedded terminal");
-                        state.widget.set_visible(false);
-                    }
-                }
+                Self { state }.spawn_finished(generation, result, &failed_shell);
             },
         );
     }
 
+    fn spawn_finished(
+        &self,
+        generation: Generation,
+        result: Result<glib::Pid, glib::Error>,
+        failed_shell: &str,
+    ) {
+        let error = result.as_ref().err().map(ToString::to_string);
+        let failed = result.is_err();
+        let completion = self
+            .state
+            .lifecycle
+            .borrow_mut()
+            .complete_spawn(generation, result.map(|pid| pid.0).map_err(|_| ()));
+        if failed && !matches!(completion, SpawnCompletion::Stale(_)) {
+            tracing::warn!(
+                error = error.as_deref().unwrap_or("unknown spawn error"),
+                shell = failed_shell,
+                "unable to start embedded terminal"
+            );
+        }
+        match completion {
+            SpawnCompletion::Running => self.clear_spawn_cancellable(generation),
+            SpawnCompletion::Terminate(pid) => {
+                self.clear_spawn_cancellable(generation);
+                terminate(pid);
+            }
+            SpawnCompletion::TerminateAndBecomeIdle(pid) => {
+                self.clear_spawn_cancellable(generation);
+                terminate(pid);
+                self.state.widget.set_visible(false);
+            }
+            SpawnCompletion::BecomeIdle => {
+                self.clear_spawn_cancellable(generation);
+                self.state.widget.set_visible(false);
+            }
+            SpawnCompletion::Stale(Some(pid)) => terminate(pid),
+            SpawnCompletion::Stale(None) => {}
+        }
+    }
+
+    fn clear_spawn_cancellable(&self, generation: Generation) {
+        let owns_callback = self
+            .state
+            .spawn_cancellable
+            .borrow()
+            .as_ref()
+            .is_some_and(|(active, _)| *active == generation);
+        if owns_callback {
+            self.state.spawn_cancellable.borrow_mut().take();
+        }
+    }
+
     fn child_exited(&self) {
-        self.state.child.set(None);
-        self.state.widget.set_visible(false);
+        if self.state.lifecycle.borrow_mut().child_exited() == ChildExit::BecameIdle {
+            self.state.widget.set_visible(false);
+        }
     }
 }
 
-fn terminate(pid: glib::Pid) {
-    let Some(pid) = rustix::process::Pid::from_raw(pid.0) else {
+fn terminate(pid: ChildPid) {
+    let Some(pid) = rustix::process::Pid::from_raw(pid) else {
         return;
     };
     let _ = rustix::process::kill_process(pid, rustix::process::Signal::HUP);
