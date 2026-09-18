@@ -19,6 +19,11 @@ fn tokens() -> ThemeTokens {
         highlight: "#2a2a35".to_string(),
         border: "#31313c".to_string(),
         dim_text: "#9a9aa6".to_string(),
+        syntax_keyword: None,
+        syntax_string: None,
+        syntax_constant: None,
+        syntax_type: None,
+        syntax_preprocessor: None,
     }
 }
 
