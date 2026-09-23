@@ -539,6 +539,30 @@ fn menus_and_keyboard_actions_follow_supported_operations_in_every_mode() {
                             assert_actions(&menu, &["Restore items"], &[]);
                         }
                     }
+                    let mut expected_order = Vec::new();
+                    if in_trash && !nested {
+                        expected_order.push("Restore items");
+                    }
+                    if nested {
+                        expected_order.extend(["Copy", "Duplicate", "Copy to…"]);
+                    } else {
+                        expected_order.extend(["Cut", "Copy", "Duplicate", "Move to…", "Copy to…"]);
+                    }
+                    if !in_trash {
+                        expected_order.push("Compress…");
+                    }
+                    expected_order.extend(["Copy paths", "Copy names", "Properties"]);
+                    if !nested {
+                        expected_order.push(if in_trash {
+                            "Permanently delete"
+                        } else {
+                            "Move to Trash"
+                        });
+                        if !in_trash {
+                            expected_order.push("Permanently delete");
+                        }
+                    }
+                    assert_actions_in_order(&menu, &expected_order);
                     menu.popdown();
                     wait_until(|| !menu.is_mapped());
                     view.browser().select(0, 0);

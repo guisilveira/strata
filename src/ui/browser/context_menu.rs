@@ -847,31 +847,33 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
         .build();
     let open_multiple = item_context_option(crate::assets::icons::EXTERNAL_LINK, "Open", "Enter");
     let open_with_multiple =
-        item_context_option(crate::assets::icons::EXTERNAL_LINK, "Open With…", "");
+        item_context_option(crate::assets::icons::APP_WINDOW, "Open With…", "");
     let restore_multiple = item_context_option(crate::assets::icons::UNDO_2, "Restore items", "");
     restore_multiple.set_visible(in_trash);
     let copy_multiple = item_context_option(crate::assets::icons::COPY, "Copy", "Ctrl+C");
-    let duplicate_multiple = item_context_option(crate::assets::icons::COPY, "Duplicate", "Ctrl+D");
-    let copy_paths = item_context_option(crate::assets::icons::COPY, "Copy paths", "Y");
-    let copy_names_button = item_context_option(crate::assets::icons::COPY, "Copy names", "");
-    let move_multiple = item_context_option(crate::assets::icons::FOLDER, "Move to…", "");
-    let copy_to_multiple = item_context_option(crate::assets::icons::COPY, "Copy to…", "");
+    let duplicate_multiple =
+        item_context_option(crate::assets::icons::COPY_PLUS, "Duplicate", "Ctrl+D");
+    let copy_paths = item_context_option(crate::assets::icons::ROUTE, "Copy paths", "Y");
+    let copy_names_button = item_context_option(crate::assets::icons::FILE_TYPE, "Copy names", "");
+    let move_multiple = item_context_option(crate::assets::icons::FOLDER_INPUT, "Move to…", "");
+    let copy_to_multiple = item_context_option(crate::assets::icons::FOLDER_OUTPUT, "Copy to…", "");
     let cut_multiple = item_context_option(crate::assets::icons::SCISSORS, "Cut", "Ctrl+X");
     let trash_multiple = if in_trash {
-        let option = item_context_danger_option(crate::assets::icons::TRASH, delete_label, "Del");
+        let option =
+            item_context_danger_option(crate::assets::icons::CIRCLE_X, delete_label, "Del");
         option.add_css_class("danger");
         option
     } else {
         item_context_option(crate::assets::icons::TRASH, delete_label, "Del")
     };
     let permanent_delete_multiple = item_context_danger_option(
-        crate::assets::icons::TRASH,
+        crate::assets::icons::CIRCLE_X,
         "Permanently delete",
         "Shift+Del",
     );
     permanent_delete_multiple.add_css_class("danger");
     let compress_multiple =
-        item_context_option(crate::assets::icons::FILE_ARCHIVE, "Compress…", "");
+        item_context_option(crate::assets::icons::PACKAGE_PLUS, "Compress…", "");
     let properties_multiple =
         item_context_option(crate::assets::icons::INFO, "Properties", "Alt+Enter");
     multiple_open.append(&open_multiple);
@@ -881,16 +883,14 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
     multiple.append(&cut_multiple);
     multiple.append(&copy_multiple);
     multiple.append(&duplicate_multiple);
-    multiple.append(&copy_paths);
-    multiple.append(&copy_names_button);
     multiple.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     multiple.append(&move_multiple);
     multiple.append(&copy_to_multiple);
-    let multiple_transfer_separator = gtk::Separator::new(gtk::Orientation::Horizontal);
-    multiple.append(&multiple_transfer_separator);
-    let multiple_archive_separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+    multiple.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     multiple.append(&compress_multiple);
-    multiple.append(&multiple_archive_separator);
+    multiple.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    multiple.append(&copy_paths);
+    multiple.append(&copy_names_button);
     multiple.append(&properties_multiple);
     multiple.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     multiple.append(&trash_multiple);
@@ -1388,7 +1388,6 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
                 .all(|entry| entry.location.native_path().is_some());
             compress.set_visible(can_compress);
             compress_multiple.set_visible(can_compress);
-            multiple_archive_separator.set_visible(can_compress);
             preview.set_visible(crate::ui::preview::entry_supports_quick_preview(&entry));
             print.set_visible(entry_supports_printing(&entry));
             open_terminal.set_visible(entry.is_directory() && can_open_terminal(&entry.location));
@@ -1409,8 +1408,6 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
                 permanently_delete_is_visible(in_trash, state.browser.can_delete_at(depth));
             permanent_delete.set_visible(permanent_delete_visible);
             permanent_delete_multiple.set_visible(permanent_delete_visible);
-            multiple_transfer_separator
-                .set_visible(can_compress || trash_visible || permanent_delete_visible);
             pin.set_visible(entry.is_directory() && !is_trash_location(&entry.location));
             pin.set_sensitive(
                 state
