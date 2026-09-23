@@ -357,10 +357,10 @@ pub(in crate::ui) fn install_folder_context_menu(
         "Ctrl+Shift+N",
     );
     let new_file = context_menu_option(crate::assets::icons::FILE_PLUS, "New File", "");
-    let open_with = context_menu_option(crate::assets::icons::EXTERNAL_LINK, "Open With…", "");
+    let paste = context_menu_option(crate::assets::icons::CLIPBOARD_PASTE, "Paste", "Ctrl+V");
+    let open_with = context_menu_option(crate::assets::icons::APP_WINDOW, "Open With…", "");
     let open_terminal =
         context_menu_option(crate::assets::icons::TERMINAL, "Open in Terminal", "Ctrl+T");
-    let paste = context_menu_option(crate::assets::icons::CLIPBOARD_PASTE, "Paste", "Ctrl+V");
     let select_all = context_menu_option(crate::assets::icons::LIST_CHECKS, "Select All", "Ctrl+A");
     let refresh = context_menu_option(crate::assets::icons::REFRESH, "Refresh", "F5");
     let hidden_files_shown = state.browser.preferences().show_hidden;
@@ -391,10 +391,11 @@ pub(in crate::ui) fn install_folder_context_menu(
     properties.set_visible(!in_recent);
     content.append(&new_folder);
     content.append(&new_file);
+    content.append(&paste);
+    content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     content.append(&open_with);
     content.append(&open_terminal);
     content.set_visible(directory_actions);
-    remaining.append(&paste);
     remaining.append(&select_all);
     remaining.append(&refresh);
     remaining.append(&toggle_hidden);

@@ -237,11 +237,36 @@ fn custom_actions_appear_for_matching_items_and_run_through_the_job_service() {
             wait_until(|| !submenu.is_visible());
 
             let menu = open_menu(&view, Some("folder"));
+            let folder_item_actions = action_buttons(menu.upcast_ref());
             assert!(
-                action_buttons(menu.upcast_ref())
+                folder_item_actions
+                    .iter()
+                    .any(|label| label == "Always available"),
+                "folder items offer applicable actions"
+            );
+            menu.popdown();
+            wait_until(|| !menu.is_mapped());
+
+            let menu = open_menu(&view, None);
+            let folder_actions = action_buttons(menu.upcast_ref());
+            assert!(
+                folder_actions
                     .iter()
                     .any(|label| label == "Always available"),
                 "folder backgrounds offer applicable actions"
+            );
+            let folder_action_position = |name: &str| {
+                folder_actions
+                    .iter()
+                    .position(|label| label == name)
+                    .unwrap_or_else(|| panic!("missing {name} from {folder_actions:?}"))
+            };
+            assert!(
+                folder_action_position("Open in Terminal")
+                    < folder_action_position("Always available")
+                    && folder_action_position("Always available")
+                        < folder_action_position("Select All"),
+                "custom actions remain between folder-targeted and selection actions: {folder_actions:?}"
             );
             menu.popdown();
             wait_until(|| !menu.is_mapped());

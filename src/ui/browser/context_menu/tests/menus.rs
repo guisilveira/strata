@@ -305,6 +305,13 @@ fn menu_labels(popover: &gtk::Popover) -> Vec<String> {
         .collect()
 }
 
+fn hidden_files_toggle_label(popover: &gtk::Popover) -> String {
+    menu_labels(popover)
+        .into_iter()
+        .find(|label| matches!(label.as_str(), "Show Hidden Files" | "Hide Hidden Files"))
+        .expect("hidden-files toggle")
+}
+
 fn button_with_label(widget: &gtk::Widget, text: &str) -> gtk::Widget {
     descendants(widget)
         .into_iter()
@@ -351,6 +358,55 @@ fn assert_actions_in_order(popover: &gtk::Popover, expected: &[&str]) {
         );
         previous = Some(index);
     }
+}
+
+fn menu_section_for_action(popover: &gtk::Popover, action: &str) -> gtk::Widget {
+    let root = popover.clone().upcast::<gtk::Widget>();
+    let item = descendants(&root)
+        .into_iter()
+        .find(|widget| {
+            widget.is_mapped()
+                && (widget.is::<gtk::Button>()
+                    || widget.accessible_role() == gtk::AccessibleRole::MenuItem)
+                && descendants(widget).iter().any(|child| {
+                    child
+                        .downcast_ref::<gtk::Label>()
+                        .is_some_and(|label| label.text() == action)
+                })
+        })
+        .unwrap_or_else(|| panic!("missing {action} from rendered menu"));
+
+    // GtkPopoverMenu renders each Gio section inside this section container.
+    let mut ancestor = Some(item);
+    while let Some(widget) = ancestor {
+        if widget.type_().name() == "GtkMenuSectionBox" {
+            return widget;
+        }
+        ancestor = widget.parent();
+    }
+    panic!("no rendered menu section contains {action}");
+}
+
+fn assert_actions_share_section(popover: &gtk::Popover, expected: &[&str]) {
+    let Some((first, rest)) = expected.split_first() else {
+        return;
+    };
+    let section = menu_section_for_action(popover, first);
+    for action in rest {
+        assert_eq!(
+            section.as_ptr(),
+            menu_section_for_action(popover, action).as_ptr(),
+            "{action} is separated from {expected:?}"
+        );
+    }
+}
+
+fn assert_actions_in_separate_sections(popover: &gtk::Popover, first: &str, second: &str) {
+    assert_ne!(
+        menu_section_for_action(popover, first).as_ptr(),
+        menu_section_for_action(popover, second).as_ptr(),
+        "{first} and {second} share a menu section"
+    );
 }
 
 fn assert_separators_divide_actions(popover: &gtk::Popover) {
@@ -662,19 +718,54 @@ fn menus_and_keyboard_actions_follow_supported_operations_in_every_mode() {
                                 "Customize…",
                             ],
                         );
+                        let hidden_toggle = hidden_files_toggle_label(&menu);
+                        assert_actions_share_section(
+                            &menu,
+                            &["Select All", "Refresh", hidden_toggle.as_str()],
+                        );
+                        assert_actions_in_separate_sections(&menu, "Refresh", "Properties");
                     } else {
                         assert_actions(
                             &menu,
                             &[
                                 "New Folder",
                                 "New File",
-                                "Open With…",
                                 "Paste",
+                                "Open With…",
                                 "Open in Terminal",
                                 "Customize…",
                             ],
                             &[],
                         );
+                        assert_actions_in_order(
+                            &menu,
+                            &[
+                                "New Folder",
+                                "New File",
+                                "Paste",
+                                "Open With…",
+                                "Open in Terminal",
+                                "Select All",
+                                "Refresh",
+                                "Customize…",
+                                "Properties",
+                            ],
+                        );
+                        let hidden_toggle = hidden_files_toggle_label(&menu);
+                        assert_actions_share_section(&menu, &["New Folder", "New File", "Paste"]);
+                        assert_actions_share_section(&menu, &["Open With…", "Open in Terminal"]);
+                        assert_actions_share_section(
+                            &menu,
+                            &["Select All", "Refresh", hidden_toggle.as_str()],
+                        );
+                        assert_actions_share_section(&menu, &["Customize…", "Properties"]);
+                        assert_actions_in_separate_sections(&menu, "New Folder", "Open With…");
+                        assert_actions_in_separate_sections(
+                            &menu,
+                            "Open in Terminal",
+                            "Select All",
+                        );
+                        assert_actions_in_separate_sections(&menu, "Refresh", "Customize…");
                     }
                     menu.popdown();
                     wait_until(|| !menu.is_mapped());
@@ -740,6 +831,11 @@ fn recent_background_menu_rejects_physical_directory_actions() {
                         "Customize…",
                         "Properties",
                     ],
+                );
+                let hidden_toggle = hidden_files_toggle_label(&menu);
+                assert_actions_share_section(
+                    &menu,
+                    &["Select All", "Refresh", hidden_toggle.as_str()],
                 );
                 assert_separators_divide_actions(&menu);
                 menu.popdown();
