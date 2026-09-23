@@ -305,6 +305,66 @@ fn menu_labels(popover: &gtk::Popover) -> Vec<String> {
         .collect()
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum RenderedMenuItem {
+    Action(String),
+    Separator,
+}
+
+fn rendered_menu(popover: &gtk::Popover) -> Vec<RenderedMenuItem> {
+    // Native menu section dividers are CSS nodes, so match public section links
+    // with mapped action labels instead of looking for GtkSeparator widgets.
+    fn collect_sections(model: &gio::MenuModel, sections: &mut Vec<Vec<String>>) {
+        let mut actions = Vec::new();
+        for index in 0..model.n_items() {
+            if let Some(section) = model.item_link(index, "section") {
+                if !actions.is_empty() {
+                    sections.push(std::mem::take(&mut actions));
+                }
+                collect_sections(&section, sections);
+            } else if let Some(label) = model
+                .item_attribute_value(index, "label", None)
+                .and_then(|value| value.get::<String>())
+            {
+                actions.push(label.replace("__", "_"));
+            }
+        }
+        if !actions.is_empty() {
+            sections.push(actions);
+        }
+    }
+
+    let labels = menu_labels(popover);
+    let model = popover
+        .downcast_ref::<gtk::PopoverMenu>()
+        .and_then(gtk::PopoverMenu::menu_model)
+        .expect("visible native menu model");
+    let mut sections = Vec::new();
+    collect_sections(&model, &mut sections);
+    let modeled: Vec<_> = sections
+        .iter()
+        .enumerate()
+        .flat_map(|(section, actions)| actions.iter().map(move |action| (section, action)))
+        .collect();
+    let mut items = Vec::new();
+    let mut model_position = 0;
+    let mut previous_section = None;
+    for label in labels {
+        let (offset, (section, _)) = modeled[model_position..]
+            .iter()
+            .enumerate()
+            .find(|(_, (_, action))| action.as_str() == label)
+            .unwrap_or_else(|| panic!("{label} is visible but missing from menu model"));
+        model_position += offset + 1;
+        if previous_section.is_some_and(|previous| previous != *section) {
+            items.push(RenderedMenuItem::Separator);
+        }
+        items.push(RenderedMenuItem::Action(label));
+        previous_section = Some(*section);
+    }
+    items
+}
+
 fn hidden_files_toggle_label(popover: &gtk::Popover) -> String {
     menu_labels(popover)
         .into_iter()
@@ -360,76 +420,67 @@ fn assert_actions_in_order(popover: &gtk::Popover, expected: &[&str]) {
     }
 }
 
-fn menu_section_for_action(popover: &gtk::Popover, action: &str) -> gtk::Widget {
-    let root = popover.clone().upcast::<gtk::Widget>();
-    let item = descendants(&root)
-        .into_iter()
-        .find(|widget| {
-            widget.is_mapped()
-                && (widget.is::<gtk::Button>()
-                    || widget.accessible_role() == gtk::AccessibleRole::MenuItem)
-                && descendants(widget).iter().any(|child| {
-                    child
-                        .downcast_ref::<gtk::Label>()
-                        .is_some_and(|label| label.text() == action)
-                })
-        })
-        .unwrap_or_else(|| panic!("missing {action} from rendered menu"));
-
-    // GtkPopoverMenu renders each Gio section inside this section container.
-    let mut ancestor = Some(item);
-    while let Some(widget) = ancestor {
-        if widget.type_().name() == "GtkMenuSectionBox" {
-            return widget;
-        }
-        ancestor = widget.parent();
-    }
-    panic!("no rendered menu section contains {action}");
+fn action_position(items: &[RenderedMenuItem], action: &str) -> usize {
+    items
+        .iter()
+        .position(|item| matches!(item, RenderedMenuItem::Action(label) if label == action))
+        .unwrap_or_else(|| panic!("missing {action} from rendered menu: {items:?}"))
 }
 
 fn assert_actions_share_section(popover: &gtk::Popover, expected: &[&str]) {
     let Some((first, rest)) = expected.split_first() else {
         return;
     };
-    let section = menu_section_for_action(popover, first);
+    let items = rendered_menu(popover);
+    let mut previous = action_position(&items, first);
     for action in rest {
-        assert_eq!(
-            section.as_ptr(),
-            menu_section_for_action(popover, action).as_ptr(),
-            "{action} is separated from {expected:?}"
+        let current = action_position(&items, action);
+        assert!(
+            previous < current
+                && !items[previous + 1..current].contains(&RenderedMenuItem::Separator),
+            "{action} is separated from {expected:?}: {items:?}"
         );
+        previous = current;
     }
 }
 
 fn assert_actions_in_separate_sections(popover: &gtk::Popover, first: &str, second: &str) {
-    assert_ne!(
-        menu_section_for_action(popover, first).as_ptr(),
-        menu_section_for_action(popover, second).as_ptr(),
-        "{first} and {second} share a menu section"
+    let items = rendered_menu(popover);
+    let start = action_position(&items, first);
+    let end = action_position(&items, second);
+    assert!(
+        start < end && items[start + 1..end].contains(&RenderedMenuItem::Separator),
+        "{first} and {second} lack a visible separator: {items:?}"
+    );
+}
+
+fn assert_group_boundary(popover: &gtk::Popover, last: &str, first: &str) {
+    let items = rendered_menu(popover);
+    let end = action_position(&items, last);
+    assert_eq!(
+        items.get(end + 1..end + 3),
+        Some(
+            &[
+                RenderedMenuItem::Separator,
+                RenderedMenuItem::Action(first.to_string()),
+            ][..]
+        ),
+        "expected a visible boundary from {last} to {first}: {items:?}"
     );
 }
 
 fn assert_separators_divide_actions(popover: &gtk::Popover) {
-    let rendered: Vec<bool> = descendants(&popover.clone().upcast::<gtk::Widget>())
-        .into_iter()
-        .filter(|widget| widget.is_mapped())
-        .filter_map(|widget| {
-            if widget.downcast_ref::<gtk::Separator>().is_some() {
-                Some(true)
-            } else if widget.downcast_ref::<gtk::Label>().is_some() {
-                Some(false)
-            } else {
-                None
-            }
-        })
-        .collect();
+    let rendered = rendered_menu(popover);
+    assert_ne!(rendered.first(), Some(&RenderedMenuItem::Separator));
     assert_ne!(
         rendered.last(),
-        Some(&true),
+        Some(&RenderedMenuItem::Separator),
         "menu ends with a separator and no following action"
     );
     assert!(
-        !rendered.windows(2).any(|pair| pair == [true, true]),
+        !rendered
+            .windows(2)
+            .any(|pair| pair == [RenderedMenuItem::Separator, RenderedMenuItem::Separator]),
         "menu renders two separators with no action between them"
     );
 }
@@ -522,6 +573,11 @@ fn menus_and_keyboard_actions_follow_supported_operations_in_every_mode() {
                             &[],
                             &["Rename", "Compress…", "Customize…", "Open file location"],
                         );
+                        if !nested {
+                            assert_group_boundary(&menu, "Duplicate", "Move to…");
+                            assert_group_boundary(&menu, "Copy to…", "Copy path");
+                            assert_group_boundary(&menu, "Properties", "Permanently delete");
+                        }
                         assert!(!view.begin_rename());
                         assert!(!view.duplicate_selection());
                     } else {
@@ -552,6 +608,10 @@ fn menus_and_keyboard_actions_follow_supported_operations_in_every_mode() {
                                 "Permanently delete",
                             ],
                         );
+                        assert_group_boundary(&menu, "Rename", "Move to…");
+                        assert_group_boundary(&menu, "Copy to…", "Compress…");
+                        assert_group_boundary(&menu, "Compress…", "Customize…");
+                        assert_group_boundary(&menu, "Properties", "Move to Trash");
                     }
                     if nested {
                         assert_actions(
@@ -581,6 +641,16 @@ fn menus_and_keyboard_actions_follow_supported_operations_in_every_mode() {
                     );
                     if in_trash {
                         assert_actions(&menu, &[], &["Compress…"]);
+                        if !nested {
+                            assert_group_boundary(&menu, "Duplicate", "Move to…");
+                            assert_group_boundary(&menu, "Copy to…", "Copy paths");
+                            assert_group_boundary(&menu, "Properties", "Permanently delete");
+                        }
+                    } else {
+                        assert_group_boundary(&menu, "Duplicate", "Move to…");
+                        assert_group_boundary(&menu, "Copy to…", "Compress…");
+                        assert_group_boundary(&menu, "Compress…", "Copy paths");
+                        assert_group_boundary(&menu, "Properties", "Move to Trash");
                     }
                     if nested {
                         assert_actions(
@@ -899,8 +969,6 @@ fn recent_item_open_file_location_uses_the_target_parent() {
     );
 }
 
-// Before popup, is_visible() includes hidden ancestors; a remote URI exposes
-// the regression because Rename is available without Compress.
 fn assert_remote_menu_separates_rename_from_properties() {
     let view = BrowserView::new(Rc::new(MenuSource), PeekBehavior::default());
     let window = gtk::Window::builder()
@@ -915,22 +983,8 @@ fn assert_remote_menu_separates_rename_from_properties() {
 
     let menu = open_menu(&view, Some("notes.txt"));
     assert_actions(&menu, &["Rename", "Properties"], &["Compress…"]);
-    wait_until(|| menu.width() > 0 && label(menu.upcast_ref(), "Rename").is_some());
-    let rename = vertical_offset(&menu, &label(menu.upcast_ref(), "Rename").expect("rename"));
-    let properties = vertical_offset(
-        &menu,
-        &label(menu.upcast_ref(), "Properties").expect("properties"),
-    );
-    assert!(
-        descendants(menu.upcast_ref())
-            .iter()
-            .filter(|widget| widget.is::<gtk::Separator>() && widget.is_mapped())
-            .any(|separator| {
-                let offset = vertical_offset(&menu, separator);
-                offset > rename && offset < properties
-            }),
-        "rename must stay separated from the properties group"
-    );
+    assert_actions_in_separate_sections(&menu, "Rename", "Properties");
+    assert_separators_divide_actions(&menu);
 
     menu.popdown();
     wait_until(|| !menu.is_mapped());
@@ -941,13 +995,6 @@ fn assert_remote_menu_separates_rename_from_properties() {
     wait_until(|| !menu.is_mapped());
     view.browser().clear_observer();
     window.destroy();
-}
-
-fn vertical_offset(menu: &gtk::Popover, widget: &gtk::Widget) -> f32 {
-    widget
-        .compute_point(menu, &gtk::graphene::Point::new(0.0, 0.0))
-        .expect("menu coordinates")
-        .y()
 }
 
 #[test]
