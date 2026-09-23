@@ -337,6 +337,22 @@ fn assert_actions(popover: &gtk::Popover, present: &[&str], absent: &[&str]) {
     }
 }
 
+fn assert_actions_in_order(popover: &gtk::Popover, expected: &[&str]) {
+    let labels = menu_labels(popover);
+    let mut previous = None;
+    for action in expected {
+        let index = labels
+            .iter()
+            .position(|label| label == action)
+            .unwrap_or_else(|| panic!("missing {action} in {labels:?}"));
+        assert!(
+            previous.is_none_or(|previous| previous < index),
+            "{action} is out of order in {labels:?}"
+        );
+        previous = Some(index);
+    }
+}
+
 fn assert_separators_divide_actions(popover: &gtk::Popover) {
     let rendered: Vec<bool> = descendants(&popover.clone().upcast::<gtk::Widget>())
         .into_iter()
@@ -443,6 +459,7 @@ fn menus_and_keyboard_actions_follow_supported_operations_in_every_mode() {
                         ],
                         &["Extract here", "Extract to…"],
                     );
+                    assert_separators_divide_actions(&menu);
                     if in_trash {
                         assert_actions(
                             &menu,
@@ -456,6 +473,28 @@ fn menus_and_keyboard_actions_follow_supported_operations_in_every_mode() {
                             &menu,
                             &["Rename", "Compress…", "Move to Trash"],
                             &["Restore", "Open file location"],
+                        );
+                        assert_actions_in_order(
+                            &menu,
+                            &[
+                                "Open",
+                                "Open With…",
+                                "Quick preview",
+                                "Print",
+                                "Cut",
+                                "Copy",
+                                "Duplicate",
+                                "Rename",
+                                "Move to…",
+                                "Copy to…",
+                                "Compress…",
+                                "Customize…",
+                                "Copy path",
+                                "Copy name",
+                                "Properties",
+                                "Move to Trash",
+                                "Permanently delete",
+                            ],
                         );
                     }
                     if nested {
@@ -478,6 +517,7 @@ fn menus_and_keyboard_actions_follow_supported_operations_in_every_mode() {
                     view.select_all();
                     let menu = open_menu(&view, Some("notes.txt"));
                     capture_menu(&menu, &format!("{mode:?}-{place}-multiple"));
+                    assert_separators_divide_actions(&menu);
                     assert_actions(
                         &menu,
                         &["Copy", "Duplicate", "Copy paths", "Copy to…", "Properties"],
@@ -515,7 +555,30 @@ fn menus_and_keyboard_actions_follow_supported_operations_in_every_mode() {
                         assert_actions(&menu, &[], &["Extract here", "Extract to…"]);
                     } else {
                         assert_actions(&menu, &["Extract here", "Extract to…"], &[]);
+                        assert_actions_in_order(
+                            &menu,
+                            &[
+                                "Open",
+                                "Open With…",
+                                "Extract here",
+                                "Extract to…",
+                                "Cut",
+                                "Copy",
+                                "Duplicate",
+                                "Rename",
+                                "Move to…",
+                                "Copy to…",
+                                "Compress…",
+                                "Customize…",
+                                "Copy path",
+                                "Copy name",
+                                "Properties",
+                                "Move to Trash",
+                                "Permanently delete",
+                            ],
+                        );
                     }
+                    assert_separators_divide_actions(&menu);
                     menu.popdown();
                     wait_until(|| !menu.is_mapped());
                     let menu = open_menu(&view, Some("archive.rar"));
@@ -526,6 +589,39 @@ fn menus_and_keyboard_actions_follow_supported_operations_in_every_mode() {
                     }
                     menu.popdown();
                     wait_until(|| !menu.is_mapped());
+                    if !nested {
+                        let menu = open_menu(&view, Some("folder"));
+                        if !in_trash {
+                            assert_actions(&menu, &["Open in Terminal", "Pin to sidebar"], &[]);
+                            assert_actions_in_order(
+                                &menu,
+                                &[
+                                    "Open",
+                                    "Open With…",
+                                    "Open in Terminal",
+                                    "Cut",
+                                    "Copy",
+                                    "Duplicate",
+                                    "Rename",
+                                    "Move to…",
+                                    "Copy to…",
+                                    "Compress…",
+                                    "Pin to sidebar",
+                                    "Customize…",
+                                    "Copy path",
+                                    "Copy name",
+                                    "Properties",
+                                    "Move to Trash",
+                                    "Permanently delete",
+                                ],
+                            );
+                        } else {
+                            assert_actions(&menu, &[], &["Open in Terminal", "Pin to sidebar"]);
+                        }
+                        assert_separators_divide_actions(&menu);
+                        menu.popdown();
+                        wait_until(|| !menu.is_mapped());
+                    }
                     let menu = open_menu(&view, None);
                     capture_menu(&menu, &format!("{mode:?}-{place}-blank"));
                     assert_actions(&menu, &["Select All", "Refresh", "Properties"], &[]);

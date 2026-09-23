@@ -765,7 +765,7 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
         .sync_create()
         .build();
     let open = item_context_option(crate::assets::icons::EXTERNAL_LINK, "Open", "↵");
-    let open_with = item_context_option(crate::assets::icons::EXTERNAL_LINK, "Open With…", "");
+    let open_with = item_context_option(crate::assets::icons::APP_WINDOW, "Open With…", "");
     let open_file_location =
         item_context_option(crate::assets::icons::FOLDER_OPEN, "Open file location", "");
     let run = item_context_option(crate::assets::icons::PLAY, "Run", "");
@@ -777,11 +777,11 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
     restore.set_visible(in_trash);
     let pin = item_context_option(crate::assets::icons::PIN, "Pin to sidebar", "P");
     let copy = item_context_option(crate::assets::icons::COPY, "Copy", "Ctrl+C");
-    let duplicate = item_context_option(crate::assets::icons::COPY, "Duplicate", "Ctrl+D");
-    let copy_path = item_context_option(crate::assets::icons::COPY, "Copy path", "Y");
-    let copy_name = item_context_option(crate::assets::icons::COPY, "Copy name", "");
-    let move_to = item_context_option(crate::assets::icons::FOLDER, "Move to…", "");
-    let copy_to = item_context_option(crate::assets::icons::COPY, "Copy to…", "");
+    let duplicate = item_context_option(crate::assets::icons::COPY_PLUS, "Duplicate", "Ctrl+D");
+    let copy_path = item_context_option(crate::assets::icons::ROUTE, "Copy path", "Y");
+    let copy_name = item_context_option(crate::assets::icons::FILE_TYPE, "Copy name", "");
+    let move_to = item_context_option(crate::assets::icons::FOLDER_INPUT, "Move to…", "");
+    let copy_to = item_context_option(crate::assets::icons::FOLDER_OUTPUT, "Copy to…", "");
     let rename = item_context_option(crate::assets::icons::PENCIL, "Rename", "F2 / Ctrl+R");
     let cut = item_context_option(crate::assets::icons::SCISSORS, "Cut", "Ctrl+X");
     let delete_label = if in_trash {
@@ -790,23 +790,24 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
         "Move to Trash"
     };
     let move_to_trash = if in_trash {
-        let option = item_context_danger_option(crate::assets::icons::TRASH, delete_label, "Del");
+        let option =
+            item_context_danger_option(crate::assets::icons::CIRCLE_X, delete_label, "Del");
         option.add_css_class("danger");
         option
     } else {
         item_context_option(crate::assets::icons::TRASH, delete_label, "Del")
     };
     let permanent_delete = item_context_danger_option(
-        crate::assets::icons::TRASH,
+        crate::assets::icons::CIRCLE_X,
         "Permanently delete",
         "Shift+Del",
     );
     permanent_delete.add_css_class("danger");
     let properties = item_context_option(crate::assets::icons::INFO, "Properties", "Alt+Enter");
     let customize = item_context_option(crate::assets::icons::PALETTE, "Customize…", "");
-    let compress = item_context_option(crate::assets::icons::FILE_ARCHIVE, "Compress…", "");
-    let extract = item_context_option(crate::assets::icons::FILE_ARCHIVE, "Extract here", "");
-    let extract_to = item_context_option(crate::assets::icons::FILE_ARCHIVE, "Extract to…", "");
+    let compress = item_context_option(crate::assets::icons::PACKAGE_PLUS, "Compress…", "");
+    let extract = item_context_option(crate::assets::icons::PACKAGE_OPEN, "Extract here", "");
+    let extract_to = item_context_option(crate::assets::icons::FOLDER_ARCHIVE, "Extract to…", "");
     single_open.append(&open);
     single_open.append(&open_with);
     single_open.append(&open_file_location);
@@ -814,28 +815,26 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
     single_open.append(&open_terminal);
     single_open.append(&preview);
     single_open.append(&restore);
+    single_open.append(&print);
     single_open.append(&extract);
     single_open.append(&extract_to);
-    single_open.append(&pin);
-    single_open.append(&print);
     content.append(&single_open);
     single.append(&cut);
     single.append(&copy);
     single.append(&duplicate);
-    single.append(&copy_path);
-    single.append(&copy_name);
+    single.append(&rename);
     single.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     single.append(&move_to);
     single.append(&copy_to);
     single.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    let archive_separator = gtk::Separator::new(gtk::Orientation::Horizontal);
-    single.append(&rename);
     single.append(&compress);
-    single.append(&archive_separator);
+    single.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    single.append(&pin);
     single.append(&customize);
+    single.append(&copy_path);
+    single.append(&copy_name);
     single.append(&properties);
-    let delete_separator = gtk::Separator::new(gtk::Orientation::Horizontal);
-    single.append(&delete_separator);
+    single.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     single.append(&move_to_trash);
     single.append(&permanent_delete);
     remaining.append(&single);
@@ -1389,7 +1388,6 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
                 .all(|entry| entry.location.native_path().is_some());
             compress.set_visible(can_compress);
             compress_multiple.set_visible(can_compress);
-            archive_separator.set_visible(rename_visible || can_compress);
             multiple_archive_separator.set_visible(can_compress);
             preview.set_visible(crate::ui::preview::entry_supports_quick_preview(&entry));
             print.set_visible(entry_supports_printing(&entry));
@@ -1411,7 +1409,6 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
                 permanently_delete_is_visible(in_trash, state.browser.can_delete_at(depth));
             permanent_delete.set_visible(permanent_delete_visible);
             permanent_delete_multiple.set_visible(permanent_delete_visible);
-            delete_separator.set_visible(trash_visible || permanent_delete_visible);
             multiple_transfer_separator
                 .set_visible(can_compress || trash_visible || permanent_delete_visible);
             pin.set_visible(entry.is_directory() && !is_trash_location(&entry.location));
