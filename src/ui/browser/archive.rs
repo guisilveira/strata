@@ -19,7 +19,7 @@ use crate::model::{FileEntry, Location};
 use crate::services::{ArchiveFormat, TransferConflict, validate_basename};
 use crate::ui::browser::ViewState;
 use crate::ui::browser::destination::{
-    folder_input_path, resolve_destination_path, setup_transfer_search,
+    TransferSearchScope, folder_input_path, resolve_destination_path, setup_transfer_search,
 };
 use crate::ui::browser::entry::{entry_kind_summary, item_count_label};
 use crate::ui::browser::paths::compact_display_path;
@@ -527,8 +527,12 @@ impl ViewState {
             &field,
             &suggestions_box,
             &generation,
-            base.clone(),
-            self.browser.preferences().show_hidden,
+            TransferSearchScope {
+                base: base.clone(),
+                search_root: glib::home_dir(),
+                root_limit: None,
+                show_hidden: self.browser.preferences().show_hidden,
+            },
             move |field| {
                 field.remove_css_class("error");
                 extract_error.set_visible(false);

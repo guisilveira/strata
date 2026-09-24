@@ -9,15 +9,34 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+pub(super) struct TransferSearchScope {
+    pub(super) base: std::path::PathBuf,
+    pub(super) search_root: std::path::PathBuf,
+    pub(super) root_limit: Option<std::path::PathBuf>,
+    pub(super) show_hidden: bool,
+}
+
 fn render_transfer_suggestions(
     suggestions: &gtk::Box,
     items: Vec<crate::services::SearchItem>,
     field: &gtk::Entry,
+    root_limit: Option<&Path>,
 ) {
     while let Some(child) = suggestions.first_child() {
         suggestions.remove(&child);
     }
-    let mut dirs: Vec<_> = items.into_iter().filter(|item| item.is_directory).collect();
+    let mut dirs: Vec<_> = items
+        .into_iter()
+        .filter_map(|mut item| {
+            if !item.is_directory {
+                return None;
+            }
+            if let Some(root) = root_limit {
+                item.path = canonical_directory_within(root, &item.path)?;
+            }
+            Some(item)
+        })
+        .collect();
     dirs.sort_by_key(|item| item.path.ancestors().count());
     dirs.truncate(8);
     if dirs.is_empty() {
@@ -72,17 +91,23 @@ pub(super) fn setup_transfer_search(
     field: &gtk::Entry,
     suggestions: &gtk::Box,
     generation: &Rc<Cell<u64>>,
-    base: std::path::PathBuf,
-    show_hidden: bool,
+    scope: TransferSearchScope,
     on_changed: impl Fn(&gtk::Entry) + 'static,
 ) {
-    let (search_handle, search_receiver) = index_tree(glib::home_dir(), show_hidden);
+    let TransferSearchScope {
+        base,
+        search_root,
+        root_limit,
+        show_hidden,
+    } = scope;
+    let (search_handle, search_receiver) = index_tree(search_root, show_hidden);
     let search_handle = Rc::new(search_handle);
     let query_handle = Rc::downgrade(&search_handle);
     let search_mode = Rc::new(Cell::new(false));
     let poll_suggestions = suggestions.downgrade();
     let poll_field = field.downgrade();
     let poll_mode = search_mode.clone();
+    let poll_root_limit = root_limit.clone();
     let _poll = glib::timeout_add_local(Duration::from_millis(16), move || {
         let _keep_search_alive = &search_handle;
         let (Some(suggestions), Some(field)) = (poll_suggestions.upgrade(), poll_field.upgrade())
@@ -108,7 +133,7 @@ pub(super) fn setup_transfer_search(
         if let Some(SearchEvent::Results { query, items, .. }) = latest
             && query == field.text().trim()
         {
-            render_transfer_suggestions(&suggestions, items, &field);
+            render_transfer_suggestions(&suggestions, items, &field, poll_root_limit.as_deref());
         }
         glib::ControlFlow::Continue
     });
@@ -127,11 +152,14 @@ pub(super) fn setup_transfer_search(
             let gen_check = generation_clone.clone();
             let home = glib::home_dir();
             let base = base.clone();
+            let root_limit = root_limit.clone();
             let field_clone = field.clone();
             let suggestions_clone = suggestions_clone.clone();
             glib::MainContext::default().spawn_local(async move {
-                let matches =
-                    gio::spawn_blocking(move || path_suggestions(&input, &base, &home)).await;
+                let matches = gio::spawn_blocking(move || {
+                    path_suggestions(&input, &base, &home, root_limit.as_deref())
+                })
+                .await;
                 if gen_check.get() != request {
                     return;
                 }
@@ -187,7 +215,12 @@ pub(super) fn resolve_destination_path(
     }
 }
 
-fn path_suggestions(input: &str, base: &Path, home: &Path) -> Vec<std::path::PathBuf> {
+fn path_suggestions(
+    input: &str,
+    base: &Path,
+    home: &Path,
+    root_limit: Option<&Path>,
+) -> Vec<std::path::PathBuf> {
     let resolved = resolve_destination_path(input, base, home);
     let trailing_separator = input.trim_end().ends_with(std::path::MAIN_SEPARATOR);
     let (directory, prefix) = if trailing_separator {
@@ -201,18 +234,35 @@ fn path_suggestions(input: &str, base: &Path, home: &Path) -> Vec<std::path::Pat
                 .unwrap_or_default(),
         )
     };
+    let directory = match root_limit {
+        Some(root) => {
+            let Some(directory) = canonical_directory_within(root, &directory) else {
+                return Vec::new();
+            };
+            directory
+        }
+        None => directory,
+    };
     let Ok(children) = std::fs::read_dir(directory) else {
         return Vec::new();
     };
     let mut matches = children
         .filter_map(Result::ok)
         .map(|child| child.path())
-        .filter(|path| path.is_dir())
-        .filter(|path| {
-            path.file_name().is_some_and(|name| {
-                let name = name.to_string_lossy().to_lowercase();
-                (prefix.starts_with('.') || !name.starts_with('.')) && name.starts_with(&prefix)
-            })
+        .filter_map(|path| {
+            if !path.is_dir() {
+                return None;
+            }
+            path.file_name()
+                .is_some_and(|name| {
+                    let name = name.to_string_lossy().to_lowercase();
+                    (prefix.starts_with('.') || !name.starts_with('.')) && name.starts_with(&prefix)
+                })
+                .then_some(())?;
+            match root_limit {
+                Some(root) => canonical_directory_within(root, &path),
+                None => Some(path),
+            }
         })
         .collect::<Vec<_>>();
     matches.sort_by_key(|path| {
@@ -222,4 +272,29 @@ fn path_suggestions(input: &str, base: &Path, home: &Path) -> Vec<std::path::Pat
     });
     matches.truncate(8);
     matches
+}
+
+pub(super) fn canonical_existing_directory(path: &Path) -> Option<std::path::PathBuf> {
+    let canonical = std::fs::canonicalize(path).ok()?;
+    canonical.is_dir().then_some(canonical)
+}
+
+pub(super) fn canonical_directory_within(
+    root: &Path,
+    candidate: &Path,
+) -> Option<std::path::PathBuf> {
+    let root = canonical_existing_directory(root)?;
+    let candidate = canonical_existing_directory(candidate)?;
+    candidate.strip_prefix(root).ok()?;
+    Some(candidate)
+}
+
+pub(super) fn rebind_directory_within_root(
+    opened_root: &Path,
+    selected: &Path,
+    current_root: &Path,
+) -> Option<std::path::PathBuf> {
+    let relative = selected.strip_prefix(opened_root).ok()?;
+    let current_root = canonical_existing_directory(current_root)?;
+    canonical_directory_within(&current_root, &current_root.join(relative))
 }

@@ -152,14 +152,70 @@ impl ActionMenuSection {
         entries: &[FileEntry],
         parent: Option<PathBuf>,
     ) {
+        #[cfg(test)]
+        if let Some(test_override) = state.send_to_menu_test_override.borrow().clone() {
+            self.rebuild_for_selection_with_destinations(
+                state,
+                entries,
+                parent,
+                test_override.destinations,
+                test_override.activate,
+                test_override.choose_folder,
+            );
+            return;
+        }
+
+        let weak_state = Rc::downgrade(state);
+        let activate: Rc<dyn Fn(String, Vec<Location>)> = Rc::new(move |id, sources| {
+            if let Some(state) = weak_state.upgrade() {
+                state.send_to_removable_device(id, sources);
+            }
+        });
+        let weak_state = Rc::downgrade(state);
+        let choose_folder: Rc<dyn Fn(String, Vec<Location>)> = Rc::new(move |id, sources| {
+            if let Some(state) = weak_state.upgrade() {
+                state.show_send_to_folder_dialog(id, sources);
+            }
+        });
+        self.rebuild_for_selection_with_destinations(
+            state,
+            entries,
+            parent,
+            crate::ui::removable_destinations(),
+            activate,
+            choose_folder,
+        );
+    }
+
+    pub(super) fn rebuild_for_selection_with_destinations(
+        &self,
+        state: &Rc<ViewState>,
+        entries: &[FileEntry],
+        parent: Option<PathBuf>,
+        destinations: Vec<crate::ui::RemovableDestination>,
+        activate: Rc<dyn Fn(String, Vec<Location>)>,
+        choose_folder: Rc<dyn Fn(String, Vec<Location>)>,
+    ) {
+        self.clear();
+        let sources: Vec<_> = entries.iter().map(|entry| entry.location.clone()).collect();
+        append_send_to_menu(
+            &self.model,
+            &self.actions,
+            &self.dispatch,
+            &destinations,
+            &sources,
+            activate,
+            choose_folder,
+        );
+
         let (Some(inputs), Some(paths), Some(parent)) =
             (inputs_for_entries(entries), native_paths(entries), parent)
         else {
-            self.clear();
+            refresh_presentation(&self.popover, &self.navigation);
             return;
         };
         let catalog = crate::ui::actions::shared().catalog();
-        self.rebuild(
+        self.rebuild_custom_actions(
             state,
             &catalog.matches(&inputs),
             paths,
@@ -169,12 +225,13 @@ impl ActionMenuSection {
     }
 
     pub(super) fn rebuild_for_folder(&self, state: &Rc<ViewState>, location: &Location) {
+        self.clear();
         let (Some(input), Some(path)) = (folder_input(location), location.native_path()) else {
-            self.clear();
+            refresh_presentation(&self.popover, &self.navigation);
             return;
         };
         let catalog = crate::ui::actions::shared().catalog();
-        self.rebuild(
+        self.rebuild_custom_actions(
             state,
             &catalog.matches(std::slice::from_ref(&input)),
             vec![path.to_path_buf()],
@@ -190,7 +247,7 @@ impl ActionMenuSection {
         }
     }
 
-    fn rebuild(
+    fn rebuild_custom_actions(
         &self,
         state: &Rc<ViewState>,
         matched: &[MatchedAction],
@@ -198,7 +255,6 @@ impl ActionMenuSection {
         parent: PathBuf,
         source: InvocationSource,
     ) {
-        self.clear();
         let submenu = gio::Menu::new();
         for (index, matched) in matched.iter().enumerate() {
             let name = format!("run-{index}");
@@ -249,6 +305,62 @@ impl ActionMenuSection {
         }
         refresh_presentation(&self.popover, &self.navigation);
     }
+}
+
+pub(super) fn append_send_to_menu(
+    model: &gio::Menu,
+    actions: &gio::SimpleActionGroup,
+    dispatch: &super::commands::MenuDispatch,
+    destinations: &[crate::ui::RemovableDestination],
+    sources: &[Location],
+    activate: Rc<dyn Fn(String, Vec<Location>)>,
+    choose_folder: Rc<dyn Fn(String, Vec<Location>)>,
+) {
+    if destinations.is_empty() || sources.is_empty() {
+        return;
+    }
+    let devices = gio::Menu::new();
+    for (index, destination) in destinations.iter().enumerate() {
+        let name = format!("send-to-{index}");
+        let id = destination.id.clone();
+        let selected = sources.to_vec();
+        let activate = activate.clone();
+        let root_dispatch = dispatch.clone();
+        let action = gio::SimpleAction::new(&name, None);
+        action.connect_activate(move |_, _| {
+            let id = id.clone();
+            let selected = selected.clone();
+            let activate = activate.clone();
+            root_dispatch.defer(move || activate(id, selected));
+        });
+        actions.add_action(&action);
+
+        let root = gio::Menu::new();
+        root.append(Some("Drive root"), Some(&format!("custom.{name}")));
+        let folder_name = format!("choose-folder-{index}");
+        let id = destination.id.clone();
+        let selected = sources.to_vec();
+        let choose_folder = choose_folder.clone();
+        let folder_dispatch = dispatch.clone();
+        let folder_action = gio::SimpleAction::new(&folder_name, None);
+        folder_action.connect_activate(move |_, _| {
+            let id = id.clone();
+            let selected = selected.clone();
+            let choose_folder = choose_folder.clone();
+            folder_dispatch.defer(move || choose_folder(id, selected));
+        });
+        actions.add_action(&folder_action);
+        let choose = gio::Menu::new();
+        choose.append(
+            Some("Choose folder…"),
+            Some(&format!("custom.{folder_name}")),
+        );
+        let device = gio::Menu::new();
+        device.append_section(None, &root);
+        device.append_section(None, &choose);
+        devices.append_submenu(Some(&destination.name), &device);
+    }
+    model.append_submenu(Some("Send to"), &devices);
 }
 
 pub(super) fn refresh_presentation(

@@ -136,6 +136,14 @@ impl Drop for GlobalActivity {
     }
 }
 
+#[cfg(test)]
+#[derive(Clone)]
+pub(super) struct SendToMenuTestOverride {
+    pub(super) destinations: Vec<crate::ui::RemovableDestination>,
+    pub(super) activate: Rc<dyn Fn(String, Vec<Location>)>,
+    pub(super) choose_folder: Rc<dyn Fn(String, Vec<Location>)>,
+}
+
 pub(super) struct ViewState {
     overlay: gtk::Overlay,
     location_control: gtk::Box,
@@ -216,6 +224,8 @@ pub(super) struct ViewState {
     drag_source_depth: Cell<Option<usize>>,
     suppress_scroll_after_drop: Cell<bool>,
     drop_active_depths: Cell<Option<(usize, usize)>>,
+    #[cfg(test)]
+    send_to_menu_test_override: RefCell<Option<SendToMenuTestOverride>>,
     browser: Rc<Browser>,
 }
 
@@ -575,6 +585,8 @@ impl BrowserView {
             drag_source_depth: Cell::new(None),
             suppress_scroll_after_drop: Cell::new(false),
             drop_active_depths: Cell::new(None),
+            #[cfg(test)]
+            send_to_menu_test_override: RefCell::new(None),
             browser,
         });
 
