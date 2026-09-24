@@ -967,7 +967,7 @@ fn build_chooser_with_source(
     content.set_wide_handle(false);
     content.set_position(SIDEBAR_WIDTH);
     sidebar.widget.set_size_request(MIN_SIDEBAR_WIDTH, -1);
-    super::window::bind_sidebar_text_size(&content);
+    super::window::bind_sidebar_text_size(&content, &sidebar);
     content.set_shrink_start_child(false);
     content.set_resize_start_child(false);
     content.set_start_child(Some(&sidebar.widget));
@@ -989,7 +989,7 @@ fn build_chooser_with_source(
     preview_split.set_end_child(Some(&preview.widget()));
     preview_split.set_position(i32::MAX);
     preview_split.set_vexpand(true);
-    preview.attach_split(&preview_split, &content, &view);
+    preview.attach_split(&preview_split, &content, &view, Some(&sidebar));
     view.add_marquee_origin(&sidebar.widget, gtk::PackType::Start);
     view.add_marquee_origin(&preview.widget(), gtk::PackType::End);
 

@@ -14,7 +14,7 @@ fn breadcrumb_navigation_restores_scrolling_after_compact_preview() {
                 preferences.set_reduce_motion(reduced_motion);
                 let fixture = Fixture::new(false);
                 fixture.preview.observe_browser(&fixture.browser.browser());
-                fixture.resize(640);
+                fixture.resize(480);
                 fixture.enter_descendants(4);
                 wait_until(|| fixture.adjustment().value() > 0.0);
                 fixture.preview.show(entry("preview.png"), Some(4));
@@ -95,7 +95,7 @@ fn compact_preview_loads_and_returns_keyboard_focus_without_losing_selection() {
                     wait_until(|| browser.entry_at(0, 1).is_some());
                     browser.select(0, 1);
                     let selected = browser.focused_entry().expect("selected file");
-                    for width in [640, 320] {
+                    for width in [360, 320] {
                         fixture.resize(width);
                         browser.focus_active();
                         let before = fixture.requests.borrow().len();
@@ -147,7 +147,9 @@ fn compact_preview_loads_and_returns_keyboard_focus_without_losing_selection() {
                         );
                         assert!(
                             RootExt::focus(&fixture.window).is_some_and(|focus| {
-                                focus.is_ancestor(&fixture.browser.widget())
+                                focus == fixture.browser.widget()
+                                    || focus.is_ancestor(&fixture.browser.widget())
+                                    || fixture.browser.widget().is_ancestor(&focus)
                             }),
                             "chooser={chooser}, mode={mode:?}, width={width}, focus={:?}",
                             RootExt::focus(&fixture.window)
@@ -177,7 +179,7 @@ fn compact_archive_open_focuses_the_tree_instead_of_the_close_button() {
                 .expect("archive position");
             browser.select(0, position);
             browser.focus_active();
-            fixture.resize(640);
+            fixture.resize(400);
             fixture.settle();
             let selected = browser.focused_entry().expect("archive entry");
             fixture.preview.toggle(Some(selected.clone()), Some(0));

@@ -149,6 +149,7 @@ pub(super) struct ViewState {
     columns_widget: gtk::Box,
     scroller: gtk::ScrolledWindow,
     mode_views: RefCell<ModeViews>,
+    mode: Cell<BrowserMode>,
     columns: RefCell<Vec<ColumnView>>,
     hovered_column: Cell<Option<usize>>,
     context_menu_column: Cell<Option<usize>>,
@@ -511,6 +512,7 @@ impl BrowserView {
             path_completion,
             columns_widget,
             scroller,
+            mode: Cell::new(mode_views.mode()),
             mode_views: RefCell::new(mode_views),
             columns: RefCell::new(Vec::new()),
             hovered_column: Cell::new(None),
@@ -896,6 +898,10 @@ impl BrowserView {
             || self.state.mode_views.borrow().rename_is_active()
     }
 
+    pub(in crate::ui) fn cancel_pending_click_rename(&self) {
+        self.state.cancel_click_rename();
+    }
+
     pub fn active_rename_field(&self) -> Option<gtk::Entry> {
         self.state
             .active_rename
@@ -920,7 +926,7 @@ impl BrowserView {
             // Sidebar-origin events do not reach the browser's pointer controllers.
             state.hovered_column.set(None);
             state.pointer_navigation();
-            let mode = state.mode_views.borrow().mode();
+            let mode = state.mode.get();
             if mode == BrowserMode::Columns {
                 let columns = state.columns.borrow();
                 let column = match edge {
@@ -934,10 +940,11 @@ impl BrowserView {
     }
 
     pub fn view_mode(&self) -> BrowserMode {
-        self.state.mode_views.borrow().mode()
+        self.state.mode.get()
     }
 
     pub fn connect_view_mode_changed(&self, handler: impl Fn(BrowserMode) + 'static) {
+        let state = Rc::downgrade(&self.state);
         self.state
             .mode_views
             .borrow()
@@ -948,15 +955,19 @@ impl BrowserView {
                     Some("list") => BrowserMode::List,
                     _ => BrowserMode::Columns,
                 };
+                if let Some(state) = state.upgrade() {
+                    state.mode.set(mode);
+                }
                 handler(mode);
             });
     }
 
     pub fn set_view_mode(&self, mode: BrowserMode) {
-        let previous = self.state.mode_views.borrow().mode();
+        let previous = self.state.mode.get();
         if mode == previous {
             return;
         }
+        self.state.mode.set(mode);
         let filter = match previous {
             BrowserMode::Columns => self.state.capture_active_column_filter(),
             BrowserMode::Icons | BrowserMode::List => {
@@ -986,6 +997,16 @@ impl BrowserView {
             self.state.focus_rebuilt_active_column();
         } else if let Some(depth) = self.state.browser.active_depth() {
             self.state.mode_views.borrow().focus_visible_pane(depth);
+        }
+    }
+
+    // Columns grabs the collection view itself; item-level focus lands on
+    // editable cells that would swallow navigation keys.
+    pub(in crate::ui) fn focus_file_view(&self) {
+        if self.view_mode() == BrowserMode::Columns {
+            self.state.focus_rebuilt_active_column();
+        } else {
+            self.state.browser.focus_active();
         }
     }
 
@@ -2028,7 +2049,7 @@ impl ViewState {
     }
 
     fn refresh_browser(&self) {
-        if self.mode_views.borrow().mode() == BrowserMode::Columns {
+        if self.mode.get() == BrowserMode::Columns {
             self.browser.refresh_all();
         } else {
             self.browser.reload_active();
@@ -2036,7 +2057,7 @@ impl ViewState {
     }
 
     fn sync_mode_selection(&self) {
-        if self.mode_views.borrow().mode() == BrowserMode::Columns {
+        if self.mode.get() == BrowserMode::Columns {
             if let Some(depth) = self.focused_column_depth() {
                 self.browser.set_active_column(depth);
             }
@@ -2117,7 +2138,7 @@ impl ViewState {
     }
 
     fn destination_depth(&self) -> Option<usize> {
-        if self.mode_views.borrow().mode() != BrowserMode::Columns {
+        if self.mode.get() != BrowserMode::Columns {
             return self.browser.active_depth();
         }
         if let Some(depth) = self.context_menu_column.get()
@@ -2135,10 +2156,6 @@ impl ViewState {
 
     fn refresh_destination_style(&self) {
         let destination = self.destination_depth();
-        let pointer = self.input_ownership.borrow().last_navigation
-            == super::input_ownership::NavigationInput::Pointer
-            && (self.hovered_column.get() == destination
-                || self.context_menu_column.get().is_some());
         let focused_column = self.focused_column_depth();
         let focused_item = self
             .browser
@@ -2193,13 +2210,6 @@ impl ViewState {
             } else {
                 column.shell.remove_css_class("destination-column");
             }
-            column.destination_hint.set_label(if !active {
-                ""
-            } else if pointer {
-                "Pointer · Paste here"
-            } else {
-                "Keyboard · Paste here"
-            });
         }
     }
 
@@ -2212,7 +2222,7 @@ impl ViewState {
     }
 
     fn select_all(&self, depth: usize) {
-        if self.mode_views.borrow().mode() != BrowserMode::Columns {
+        if self.mode.get() != BrowserMode::Columns {
             self.browser.select_all(depth);
             return;
         }

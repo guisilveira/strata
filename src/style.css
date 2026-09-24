@@ -93,7 +93,12 @@ headerbar {
   min-height: 40px;
 }
 
+headerbar > windowhandle {
+  padding: 0;
+}
+
 headerbar > windowhandle > box {
+  border-spacing: 0;
   min-height: 40px;
   padding: 0;
 }
@@ -116,6 +121,8 @@ headerbar menubutton {
 
 headerbar .sidebar-toggle {
   color: @theme_accent;
+  margin-left: 5px;
+  min-width: 36px;
 }
 
 headerbar .sidebar-toggle,
@@ -149,7 +156,7 @@ headerbar menubutton.header-action > button:checked {
 
 .header-actions {
   margin: 0;
-  padding: 0;
+  padding: 0 6px 0 0;
 }
 
 headerbar image {
@@ -1837,7 +1844,7 @@ scrollbar.horizontal > range > trough > slider {
 
 .sidebar {
   background: @theme_surface;
-  padding: 8px 7px;
+  padding: 5px;
 }
 
 .sidebar-update {
@@ -1876,25 +1883,6 @@ scrollbar.horizontal > range > trough > slider {
   color: @theme_accent;
   font-size: 0.88em;
   font-weight: 650;
-}
-
-.sidebar-update.preview {
-  color: @theme_danger;
-}
-
-.sidebar-update.preview:hover {
-  background: alpha(@theme_danger, 0.16);
-  color: @theme_danger;
-}
-
-.sidebar-update.preview:active {
-  background: alpha(@theme_danger, 0.24);
-  color: @theme_danger;
-}
-
-.sidebar-update.preview .sidebar-update-dot,
-.sidebar-update.preview .sidebar-update-label {
-  color: @theme_danger;
 }
 
 .sidebar-row {
@@ -2026,6 +2014,45 @@ scrollbar.horizontal > range > trough > slider {
 
 .sidebar-update-separator {
   margin: 0;
+}
+
+.sidebar-rail .sidebar {
+  padding: 5px;
+}
+
+.sidebar-rail .sidebar-row {
+  min-height: 24px;
+  min-width: 24px;
+  padding: 4px;
+}
+
+.sidebar-rail .sidebar-device {
+  padding-right: 0;
+}
+
+.sidebar-rail .sidebar-row > box > label,
+.sidebar-rail .sidebar-heading,
+.sidebar-rail .sidebar-device-actions,
+.sidebar-rail .sidebar-update-label {
+  opacity: 0;
+  min-width: 0;
+  min-height: 0;
+  font-size: 0;
+}
+
+.sidebar-rail .sidebar-separator {
+  margin: 6px 2px;
+}
+
+.sidebar-rail .sidebar-update-separator {
+  margin: 0;
+}
+
+.sidebar-rail .sidebar-update {
+  margin: 0;
+  min-height: 24px;
+  min-width: 24px;
+  padding: 4px;
 }
 
 .sidebar-heading {
@@ -2925,21 +2952,6 @@ entry.preview-command-entry selection {
   border-top-color: @theme_accent;
 }
 
-.column-destination-hint {
-  min-height: 24px;
-  padding: 0 12px;
-  font-size: 0.85em;
-  color: @theme_dim_text;
-  background: @theme_bg;
-  border-top: 1px solid transparent;
-}
-
-.destination-column .column-destination-hint {
-  color: @theme_text;
-  background: @theme_surface;
-  border-top-color: @theme_accent;
-}
-
 .directory-column scrolledwindow,
 .directory-column viewport,
 .directory-column listview {
@@ -3497,6 +3509,11 @@ textview > popover.menu > contents {
   box-shadow: 0 0 14px alpha(@theme_glow, 0.24);
   color: @theme_text;
   padding: 0;
+}
+
+.folder-context-popover label {
+  opacity: 1;
+  font-size: 1em;
 }
 
 .context-menu-scroll,
