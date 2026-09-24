@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 
-use std::{path::PathBuf, rc::Rc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use gtk::{gio, prelude::*};
 
@@ -11,7 +15,7 @@ use crate::{
     ui::actions::{action_icon, folder_input, inputs_for_entries, native_paths, run_action},
 };
 
-use super::super::ViewState;
+use super::super::{SendToMenuHandlers, ViewState};
 
 pub(super) struct ActionMenuSection {
     popover: gtk::PopoverMenu,
@@ -159,14 +163,14 @@ impl ActionMenuSection {
                 entries,
                 parent,
                 test_override.destinations,
-                test_override.activate,
-                test_override.choose_folder,
+                test_override.recent_destinations,
+                test_override.handlers,
             );
             return;
         }
 
         let weak_state = Rc::downgrade(state);
-        let activate: Rc<dyn Fn(String, Vec<Location>)> = Rc::new(move |id, sources| {
+        let activate_root: Rc<dyn Fn(String, Vec<Location>)> = Rc::new(move |id, sources| {
             if let Some(state) = weak_state.upgrade() {
                 state.send_to_removable_device(id, sources);
             }
@@ -177,13 +181,36 @@ impl ActionMenuSection {
                 state.show_send_to_folder_dialog(id, sources);
             }
         });
+        let weak_state = Rc::downgrade(state);
+        let activate_recent: Rc<dyn Fn(String, PathBuf, Vec<Location>)> =
+            Rc::new(move |id, relative, sources| {
+                if let Some(state) = weak_state.upgrade() {
+                    state.send_to_recent_destination(id, relative, sources);
+                }
+            });
+        let handlers = SendToMenuHandlers {
+            activate_root,
+            activate_recent,
+            choose_folder,
+        };
+        let destinations = crate::ui::removable_destinations();
+        let preferences = crate::ui::preferences::PreferenceManager::shared();
+        let recent_destinations = destinations
+            .iter()
+            .map(|destination| {
+                (
+                    destination.id.clone(),
+                    preferences.send_to_recent_destinations(&destination.id),
+                )
+            })
+            .collect();
         self.rebuild_for_selection_with_destinations(
             state,
             entries,
             parent,
-            crate::ui::removable_destinations(),
-            activate,
-            choose_folder,
+            destinations,
+            recent_destinations,
+            handlers,
         );
     }
 
@@ -193,8 +220,8 @@ impl ActionMenuSection {
         entries: &[FileEntry],
         parent: Option<PathBuf>,
         destinations: Vec<crate::ui::RemovableDestination>,
-        activate: Rc<dyn Fn(String, Vec<Location>)>,
-        choose_folder: Rc<dyn Fn(String, Vec<Location>)>,
+        recent_destinations: HashMap<String, Vec<PathBuf>>,
+        handlers: SendToMenuHandlers,
     ) {
         self.clear();
         let sources: Vec<_> = entries.iter().map(|entry| entry.location.clone()).collect();
@@ -203,9 +230,9 @@ impl ActionMenuSection {
             &self.actions,
             &self.dispatch,
             &destinations,
+            &recent_destinations,
             &sources,
-            activate,
-            choose_folder,
+            handlers,
         );
 
         let (Some(inputs), Some(paths), Some(parent)) =
@@ -312,9 +339,9 @@ pub(super) fn append_send_to_menu(
     actions: &gio::SimpleActionGroup,
     dispatch: &super::commands::MenuDispatch,
     destinations: &[crate::ui::RemovableDestination],
+    recent_destinations: &HashMap<String, Vec<PathBuf>>,
     sources: &[Location],
-    activate: Rc<dyn Fn(String, Vec<Location>)>,
-    choose_folder: Rc<dyn Fn(String, Vec<Location>)>,
+    handlers: SendToMenuHandlers,
 ) {
     if destinations.is_empty() || sources.is_empty() {
         return;
@@ -324,23 +351,48 @@ pub(super) fn append_send_to_menu(
         let name = format!("send-to-{index}");
         let id = destination.id.clone();
         let selected = sources.to_vec();
-        let activate = activate.clone();
+        let activate_root = handlers.activate_root.clone();
         let root_dispatch = dispatch.clone();
         let action = gio::SimpleAction::new(&name, None);
         action.connect_activate(move |_, _| {
             let id = id.clone();
             let selected = selected.clone();
-            let activate = activate.clone();
-            root_dispatch.defer(move || activate(id, selected));
+            let activate_root = activate_root.clone();
+            root_dispatch.defer(move || activate_root(id, selected));
         });
         actions.add_action(&action);
 
         let root = gio::Menu::new();
         root.append(Some("Drive root"), Some(&format!("custom.{name}")));
+        let recent_paths = recent_destinations
+            .get(&destination.id)
+            .map(|paths| valid_recent_destinations(&destination.root, paths))
+            .unwrap_or_default();
+        for (recent_index, relative) in recent_paths.into_iter().enumerate() {
+            let recent_name = format!("send-to-recent-{index}-{recent_index}");
+            let id = destination.id.clone();
+            let selected = sources.to_vec();
+            let relative_path = relative.clone();
+            let activate_recent = handlers.activate_recent.clone();
+            let recent_dispatch = dispatch.clone();
+            let recent_action = gio::SimpleAction::new(&recent_name, None);
+            recent_action.connect_activate(move |_, _| {
+                let id = id.clone();
+                let relative = relative_path.clone();
+                let selected = selected.clone();
+                let activate_recent = activate_recent.clone();
+                recent_dispatch.defer(move || activate_recent(id, relative, selected));
+            });
+            actions.add_action(&recent_action);
+            root.append(
+                Some(&relative.to_string_lossy()),
+                Some(&format!("custom.{recent_name}")),
+            );
+        }
         let folder_name = format!("choose-folder-{index}");
         let id = destination.id.clone();
         let selected = sources.to_vec();
-        let choose_folder = choose_folder.clone();
+        let choose_folder = handlers.choose_folder.clone();
         let folder_dispatch = dispatch.clone();
         let folder_action = gio::SimpleAction::new(&folder_name, None);
         folder_action.connect_activate(move |_, _| {
@@ -361,6 +413,37 @@ pub(super) fn append_send_to_menu(
         devices.append_submenu(Some(&destination.name), &device);
     }
     model.append_submenu(Some("Send to"), &devices);
+}
+
+fn valid_recent_destinations(root: &Path, persisted: &[PathBuf]) -> Vec<PathBuf> {
+    let Some(canonical_root) = crate::ui::browser::destination::canonical_existing_directory(root)
+    else {
+        return Vec::new();
+    };
+    let mut seen_relative = HashSet::new();
+    let mut seen_destinations = HashSet::new();
+    let mut valid = Vec::new();
+    for relative in persisted {
+        if !crate::ui::preferences::is_valid_send_to_relative_path(relative)
+            || !seen_relative.insert(relative)
+        {
+            continue;
+        }
+        let Some(destination) = crate::ui::browser::destination::canonical_directory_within(
+            &canonical_root,
+            &canonical_root.join(relative),
+        ) else {
+            continue;
+        };
+        if destination == canonical_root || !seen_destinations.insert(destination) {
+            continue;
+        }
+        valid.push(relative.clone());
+        if valid.len() == crate::ui::preferences::SEND_TO_RECENT_DESTINATIONS_LIMIT {
+            break;
+        }
+    }
+    valid
 }
 
 pub(super) fn refresh_presentation(

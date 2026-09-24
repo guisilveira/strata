@@ -140,7 +140,14 @@ impl Drop for GlobalActivity {
 #[derive(Clone)]
 pub(super) struct SendToMenuTestOverride {
     pub(super) destinations: Vec<crate::ui::RemovableDestination>,
-    pub(super) activate: Rc<dyn Fn(String, Vec<Location>)>,
+    pub(super) recent_destinations: std::collections::HashMap<String, Vec<std::path::PathBuf>>,
+    pub(super) handlers: SendToMenuHandlers,
+}
+
+#[derive(Clone)]
+pub(super) struct SendToMenuHandlers {
+    pub(super) activate_root: Rc<dyn Fn(String, Vec<Location>)>,
+    pub(super) activate_recent: Rc<dyn Fn(String, std::path::PathBuf, Vec<Location>)>,
     pub(super) choose_folder: Rc<dyn Fn(String, Vec<Location>)>,
 }
 

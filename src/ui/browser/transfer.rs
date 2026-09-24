@@ -293,6 +293,80 @@ impl ViewState {
         self.send_to(Location::local(destination), sources);
     }
 
+    pub(super) fn send_to_recent_destination(
+        self: &Rc<Self>,
+        id: String,
+        relative: PathBuf,
+        sources: Vec<Location>,
+    ) {
+        self.send_to_recent_destination_with_resolver(
+            &id,
+            &relative,
+            sources,
+            crate::ui::resolve_removable_destination,
+        );
+    }
+
+    pub(super) fn send_to_recent_destination_with_resolver(
+        self: &Rc<Self>,
+        id: &str,
+        relative: &Path,
+        sources: Vec<Location>,
+        resolve: impl FnOnce(&str) -> Option<PathBuf>,
+    ) {
+        if !crate::ui::preferences::is_valid_send_to_relative_path(relative) {
+            show_error_dialog(
+                &self.overlay,
+                "Destination unavailable",
+                "The removable device or folder is no longer available.",
+            );
+            return;
+        }
+        let Some(current_root) = resolve(id)
+            .and_then(|root| crate::ui::browser::destination::canonical_existing_directory(&root))
+        else {
+            show_error_dialog(
+                &self.overlay,
+                "Destination unavailable",
+                "The removable device or folder is no longer available.",
+            );
+            return;
+        };
+        let Some(destination) = crate::ui::browser::destination::canonical_directory_within(
+            &current_root,
+            &current_root.join(relative),
+        ) else {
+            show_error_dialog(
+                &self.overlay,
+                "Destination unavailable",
+                "The removable device or folder is no longer available.",
+            );
+            return;
+        };
+        let Ok(relative_destination) = destination.strip_prefix(&current_root) else {
+            show_error_dialog(
+                &self.overlay,
+                "Destination unavailable",
+                "The removable device or folder is no longer available.",
+            );
+            return;
+        };
+        if !crate::ui::preferences::is_valid_send_to_relative_path(relative_destination) {
+            show_error_dialog(
+                &self.overlay,
+                "Destination unavailable",
+                "The removable device or folder is no longer available.",
+            );
+            return;
+        }
+        crate::ui::preferences::PreferenceManager::shared().remember_send_to_destination(
+            id,
+            relative_destination,
+            Some(relative),
+        );
+        self.send_to(Location::local(destination), sources);
+    }
+
     pub(super) fn send_to(self: &Rc<Self>, destination: Location, sources: Vec<Location>) {
         self.start_transfer_with_reveal(destination, sources, false, false);
     }
@@ -989,6 +1063,10 @@ impl ViewState {
                     confirm_field.grab_focus();
                     return;
                 };
+                if let Ok(relative_destination) = destination.strip_prefix(&current_root) {
+                    crate::ui::preferences::PreferenceManager::shared()
+                        .remember_send_to_destination(device_id, relative_destination, None);
+                }
                 transfer_state.send_to(Location::local(destination), sources.clone());
                 dismiss_modal_layer(&confirm_layer, &confirm_overlay, confirm_root.as_ref());
                 return;
