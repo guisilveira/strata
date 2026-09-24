@@ -811,10 +811,10 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
     let extract_to = item_context_option(crate::assets::icons::FOLDER_ARCHIVE, "Extract to…", "");
     single_open.append(&open);
     single_open.append(&open_with);
+    single_open.append(&preview);
     single_open.append(&open_file_location);
     single_open.append(&run);
     single_open.append(&open_terminal);
-    single_open.append(&preview);
     single_open.append(&restore);
     single_open.append(&print);
     single_open.append(&extract);

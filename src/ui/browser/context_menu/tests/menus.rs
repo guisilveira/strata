@@ -948,7 +948,11 @@ fn recent_item_open_file_location_uses_the_target_parent() {
                 wait_until(|| label(&view.widget(), "notes.txt").is_some());
 
                 let menu = open_menu(&view, Some("notes.txt"));
-                assert_actions(&menu, &["Open file location"], &[]);
+                assert_actions(&menu, &["Quick preview", "Open file location"], &[]);
+                assert_actions_in_order(
+                    &menu,
+                    &["Open", "Open With…", "Quick preview", "Open file location"],
+                );
                 button_with_label(menu.upcast_ref(), "Open file location").activate();
                 wait_until(|| !menu.is_mapped());
                 wait_until(|| {
