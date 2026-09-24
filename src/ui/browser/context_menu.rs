@@ -1086,17 +1086,22 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
     let preview_target = target.clone();
     let preview_popover = popover.downgrade();
     preview.connect_clicked(move |_| {
+        let target = preview_target.borrow().clone();
         if let Some(popover) = preview_popover.upgrade() {
             popover.popdown();
         }
-        let Some((position, entry)) = preview_target.borrow().clone() else {
+        let Some((position, entry)) = target else {
             return;
         };
-        if let Some(state) = weak.upgrade()
-            && !entry.is_directory()
-        {
-            preview_context_entry(&state, depth, position, entry);
-        }
+        // Focus restoration can preview the previous selection; dispatch this target afterward.
+        let weak = weak.clone();
+        glib::idle_add_local_once(move || {
+            if let Some(state) = weak.upgrade()
+                && !entry.is_directory()
+            {
+                preview_context_entry(&state, depth, position, entry);
+            }
+        });
     });
     let weak = Rc::downgrade(state);
     let print_target = target.clone();
