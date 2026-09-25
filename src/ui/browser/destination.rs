@@ -270,7 +270,11 @@ fn path_suggestions(
             .map(|name| name.to_string_lossy().to_lowercase())
             .unwrap_or_default()
     });
-    matches.truncate(8);
+    // An empty prefix lists a directory's children for the scrollable
+    // suggestions; only a typed prefix is an autocomplete window.
+    if !prefix.is_empty() {
+        matches.truncate(8);
+    }
     matches
 }
 
