@@ -513,6 +513,97 @@ fn send_to_copies_every_source_without_reveal_or_navigation() {
 }
 
 #[test]
+fn send_to_drive_root_uses_current_root_after_same_id_remount() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::send_to_drive_root_uses_current_root_after_same_id_remount",
+        || {
+            let fixture = tempfile::tempdir().expect("remount fixture");
+            let source_dir = fixture.path().join("source");
+            let stale_root = fixture.path().join("mount-a");
+            let current_root = fixture.path().join("mount-b");
+            std::fs::create_dir(&source_dir).expect("source directory");
+            std::fs::create_dir(&stale_root).expect("stale mount root");
+            std::fs::create_dir(&current_root).expect("current mount root");
+            let source = source_dir.join("selected.txt");
+            std::fs::write(&source, "selected contents").expect("source file");
+
+            let device_id = "volume:remounted-device";
+            let view = crate::ui::browser::BrowserView::new(
+                Rc::new(crate::adapters::LocalFileSource),
+                crate::ui::browser::PeekBehavior::default(),
+            );
+            view.set_operation_provider(Rc::new(crate::adapters::LocalOperationProvider));
+            view.navigate_location(Location::local(&source_dir));
+            let browser = view.browser();
+            let events = Rc::new(RefCell::new(Vec::new()));
+            let observed = events.clone();
+            browser.observe(move |event| observed.borrow_mut().push(event.clone()));
+
+            // The same stable ID now resolves to the remounted root. Activation
+            // must use the current root; the stale menu-time root is not
+            // authoritative.
+            let current = current_root.clone();
+            view.state.send_to_removable_device_with_resolver(
+                device_id,
+                vec![Location::local(&source)],
+                |resolved_id| {
+                    assert_eq!(resolved_id, device_id);
+                    Some(current.clone())
+                },
+            );
+            wait_until(
+                || {
+                    current_root.join("selected.txt").exists()
+                        && events.borrow().iter().any(|event| {
+                            matches!(event, crate::app::BrowserEvent::TransferFinished { .. })
+                        })
+                },
+                "drive-root copy to the current mount root",
+            );
+
+            assert_eq!(
+                std::fs::read_to_string(current_root.join("selected.txt"))
+                    .expect("copy on remounted device"),
+                "selected contents"
+            );
+            assert!(source.exists(), "Send to preserves the selected source");
+            assert!(
+                std::fs::read_dir(&stale_root)
+                    .expect("stale mount root")
+                    .next()
+                    .is_none(),
+                "the stale root is not trusted after remount"
+            );
+            assert_eq!(
+                browser.active_location(),
+                Some(Location::local(&source_dir)),
+                "Send to leaves the browser location unchanged"
+            );
+            let events = events.borrow();
+            assert_eq!(
+                events
+                    .iter()
+                    .filter_map(|event| match event {
+                        crate::app::BrowserEvent::TransferStarted { total, moving } => {
+                            Some((*total, *moving))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                [(1, false)]
+            );
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, crate::app::BrowserEvent::TransferReveal { .. })),
+                "Send to never reveals its destination"
+            );
+            browser.clear_observer();
+        },
+    );
+}
+
+#[test]
 fn choose_folder_rejects_invalid_destinations_and_copies_into_a_confined_directory() {
     crate::test_support::gtk_test(
         "ui::browser::transfer::tests::choose_folder_rejects_invalid_destinations_and_copies_into_a_confined_directory",
