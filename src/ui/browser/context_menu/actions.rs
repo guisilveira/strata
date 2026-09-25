@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     rc::Rc,
@@ -17,9 +18,13 @@ use crate::{
 
 use super::super::{SendToMenuHandlers, ViewState};
 
+const SEND_TO_DEVICE_NAME_MAX_CHARS: i32 = 15;
+
 pub(super) struct ActionMenuSection {
     popover: gtk::PopoverMenu,
     model: gio::Menu,
+    pub(super) transfer_sections: Option<[gio::Menu; 2]>,
+    send_to_row_indices: RefCell<[Option<i32>; 2]>,
     root_model: gio::Menu,
     header: Option<gtk::Widget>,
     owner: gtk::glib::WeakRef<gtk::Widget>,
@@ -35,6 +40,7 @@ impl ActionMenuSection {
         after: &impl IsA<gtk::Widget>,
         header: Option<&gtk::Widget>,
         anchor: &gtk::Widget,
+        transfer_buttons: Option<[gtk::Button; 2]>,
     ) -> Self {
         let model = gio::Menu::new();
         let root = gio::Menu::new();
@@ -55,6 +61,7 @@ impl ActionMenuSection {
             &popover,
             &dispatch,
             &navigation,
+            transfer_buttons.as_ref(),
         );
         popover.insert_action_group("builtin", Some(&commands.group));
         if let Some(header) = header {
@@ -108,9 +115,12 @@ impl ActionMenuSection {
             }
         });
         refresh_presentation(&popover, &navigation);
+        let transfer_sections = commands.transfer_sections.clone();
         Self {
             popover,
             model,
+            transfer_sections,
+            send_to_row_indices: RefCell::new([None, None]),
             root_model: root,
             header: header.cloned(),
             owner: anchor.downgrade(),
@@ -225,15 +235,32 @@ impl ActionMenuSection {
     ) {
         self.clear();
         let sources: Vec<_> = entries.iter().map(|entry| entry.location.clone()).collect();
-        append_send_to_menu(
-            &self.model,
-            &self.actions,
-            &self.dispatch,
-            &destinations,
-            &recent_destinations,
-            &sources,
-            handlers,
-        );
+        if let Some(transfer_index) = match sources.len() {
+            0 => None,
+            1 => Some(0),
+            _ => Some(1),
+        } && let Some(transfer_sections) = &self.transfer_sections
+        {
+            let send_to = gio::Menu::new();
+            append_send_to_menu(
+                &send_to,
+                &self.actions,
+                &self.dispatch,
+                &destinations,
+                &recent_destinations,
+                &sources,
+                handlers,
+            );
+            if send_to.n_items() > 0 {
+                let section = &transfer_sections[transfer_index];
+                let row_index = section.n_items();
+                let devices = send_to.item_link(0, "submenu").expect("Send to submenu");
+                let item = gio::MenuItem::new_submenu(Some("Send to…"), &devices);
+                item.set_icon(&gio::ThemedIcon::new(crate::assets::icons::SEND_HORIZONTAL));
+                section.append_item(&item);
+                self.send_to_row_indices.borrow_mut()[transfer_index] = Some(row_index);
+            }
+        }
 
         let (Some(inputs), Some(paths), Some(parent)) =
             (inputs_for_entries(entries), native_paths(entries), parent)
@@ -268,6 +295,13 @@ impl ActionMenuSection {
     }
 
     fn clear(&self) {
+        if let Some(transfer_sections) = &self.transfer_sections {
+            for (index, row_index) in self.send_to_row_indices.borrow_mut().iter_mut().enumerate() {
+                if let Some(row_index) = row_index.take() {
+                    transfer_sections[index].remove(row_index);
+                }
+            }
+        }
         self.model.remove_all();
         for name in self.actions.list_actions() {
             self.actions.remove_action(&name);
@@ -385,7 +419,10 @@ pub(super) fn append_send_to_menu(
             });
             actions.add_action(&recent_action);
             root.append(
-                Some(&relative.to_string_lossy()),
+                Some(&format!(
+                    "{} (recent)",
+                    relative.to_string_lossy().replace('_', "__")
+                )),
                 Some(&format!("custom.{recent_name}")),
             );
         }
@@ -410,9 +447,13 @@ pub(super) fn append_send_to_menu(
         let device = gio::Menu::new();
         device.append_section(None, &root);
         device.append_section(None, &choose);
-        devices.append_submenu(Some(&destination.name), &device);
+        let item = gio::MenuItem::new_submenu(Some(&destination.name.replace('_', "__")), &device);
+        item.set_icon(&gio::ThemedIcon::new(icons::HARD_DRIVE));
+        item.set_attribute_value("x-strata-send-to-device", Some(&true.to_variant()));
+        item.set_attribute_value("x-strata-tooltip", Some(&destination.name.to_variant()));
+        devices.append_item(&item);
     }
-    model.append_submenu(Some("Send to"), &devices);
+    model.append_submenu(Some("Send to…"), &devices);
 }
 
 fn valid_recent_destinations(root: &Path, persisted: &[PathBuf]) -> Vec<PathBuf> {
@@ -462,7 +503,9 @@ struct ItemPresentation {
     label: String,
     description: String,
     tooltip: Option<String>,
+    submenu: Option<gio::MenuModel>,
     icon_size: i32,
+    send_to_device: bool,
     danger: bool,
     custom: bool,
 }
@@ -479,10 +522,15 @@ fn collect_presentations(model: &gio::MenuModel, items: &mut Vec<ItemPresentatio
                 label: label.replace("__", "_"),
                 description: string("x-strata-description").unwrap_or_default(),
                 tooltip: string("x-strata-tooltip"),
+                submenu: model.item_link(index, "submenu"),
                 icon_size: model
                     .item_attribute_value(index, "x-strata-icon-size", None)
                     .and_then(|value| value.get::<i32>())
                     .unwrap_or(15),
+                send_to_device: model
+                    .item_attribute_value(index, "x-strata-send-to-device", None)
+                    .and_then(|value| value.get::<bool>())
+                    .unwrap_or(false),
                 danger: model
                     .item_attribute_value(index, "x-strata-danger", None)
                     .and_then(|value| value.get::<bool>())
@@ -605,15 +653,15 @@ fn present_native_items(
         && let Some(label) = children
             .iter()
             .find_map(|child| child.downcast_ref::<gtk::Label>())
-        && let Some(item) = items
-            .iter()
-            .find(|item| item.label == label.text())
-            .cloned()
+        && let Some(item) = native_item_presentation(widget, label.text().as_str(), items)
     {
         let initialized = widget.has_css_class("strata-native-menu-item");
         widget.add_css_class("strata-native-menu-item");
         label.set_hexpand(true);
-        if item.custom {
+        if item.send_to_device {
+            label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            label.set_max_width_chars(SEND_TO_DEVICE_NAME_MAX_CHARS);
+        } else if item.custom {
             label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
             label.set_max_width_chars(24);
         }
@@ -656,6 +704,27 @@ fn label_menu_item(widget: &gtk::Widget, item: &ItemPresentation) {
         gtk::accessible::Property::Label(&item.label),
         gtk::accessible::Property::Description(&item.description),
     ]);
+}
+
+fn native_item_presentation(
+    widget: &gtk::Widget,
+    label: &str,
+    items: &[ItemPresentation],
+) -> Option<ItemPresentation> {
+    let popover = widget
+        .find_property("popover")
+        .and_then(|_| widget.property::<Option<gtk::Popover>>("popover"))
+        .and_then(|popover| popover.downcast::<gtk::PopoverMenu>().ok());
+
+    if let Some(popover) = popover {
+        let submenu = popover.menu_model()?;
+        return items
+            .iter()
+            .find(|item| item.submenu.as_ref() == Some(&submenu))
+            .cloned();
+    }
+
+    items.iter().find(|item| item.label == label).cloned()
 }
 
 fn bind_menu_icon(image: &gtk::Image, name: &str) {
