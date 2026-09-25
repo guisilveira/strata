@@ -1087,21 +1087,24 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
     let preview_popover = popover.downgrade();
     preview.connect_clicked(move |_| {
         let target = preview_target.borrow().clone();
-        if let Some(popover) = preview_popover.upgrade() {
-            popover.popdown();
-        }
-        let Some((position, entry)) = target else {
-            return;
-        };
-        // Menu dismissal can focus another search result; restore the clicked target first.
+        let popover = preview_popover.clone();
         let weak = weak.clone();
+        // Dismiss after the click finishes so it cannot select a result beneath the menu.
         glib::idle_add_local_once(move || {
-            if let Some(state) = weak.upgrade()
-                && !entry.is_directory()
-            {
-                focus_context_entry(&state, depth, position, &entry);
-                preview_context_entry(&state, depth, position, entry);
+            if let Some(popover) = popover.upgrade() {
+                popover.popdown();
             }
+            let Some((position, entry)) = target else {
+                return;
+            };
+            glib::idle_add_local_once(move || {
+                if let Some(state) = weak.upgrade()
+                    && !entry.is_directory()
+                {
+                    focus_context_entry(&state, depth, position, &entry);
+                    preview_context_entry(&state, depth, position, entry);
+                }
+            });
         });
     });
     let weak = Rc::downgrade(state);
