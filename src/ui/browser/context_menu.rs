@@ -1093,12 +1093,13 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
         let Some((position, entry)) = target else {
             return;
         };
-        // Focus restoration can preview the previous selection; dispatch this target afterward.
+        // Menu dismissal can focus another search result; restore the clicked target first.
         let weak = weak.clone();
         glib::idle_add_local_once(move || {
             if let Some(state) = weak.upgrade()
                 && !entry.is_directory()
             {
+                focus_context_entry(&state, depth, position, &entry);
                 preview_context_entry(&state, depth, position, entry);
             }
         });
