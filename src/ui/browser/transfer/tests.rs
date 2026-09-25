@@ -542,6 +542,10 @@ fn choose_folder_rejects_invalid_destinations_and_copies_into_a_confined_directo
                     .expect("internal symlink");
             }
 
+            let device_id = "volume:current-device";
+            let preferences = crate::ui::preferences::PreferenceManager::shared();
+            preferences.remember_send_to_destination(device_id, Path::new("Previously used"), None);
+            let original_recents = preferences.send_to_recent_destinations(device_id);
             let view = crate::ui::browser::BrowserView::new(
                 Rc::new(crate::adapters::LocalFileSource),
                 crate::ui::browser::PeekBehavior::default(),
@@ -558,9 +562,9 @@ fn choose_folder_rejects_invalid_destinations_and_copies_into_a_confined_directo
 
             let root = device.clone();
             view.state.show_send_to_folder_dialog_with_resolver(
-                "volume:current-device".to_owned(),
+                device_id.to_owned(),
                 vec![Location::local(&first), Location::local(&second)],
-                Rc::new(move |id| (id == "volume:current-device").then(|| root.clone())),
+                Rc::new(move |id| (id == device_id).then(|| root.clone())),
             );
             assert!(wait_for_modal_layer(&overlay), "Choose folder dialog opens");
             let field = destination_field(&overlay);
@@ -591,6 +595,11 @@ fn choose_folder_rejects_invalid_destinations_and_copies_into_a_confined_directo
                     )),
                     "an invalid destination is rejected before dispatch"
                 );
+                assert_eq!(
+                    preferences.send_to_recent_destinations(device_id),
+                    original_recents,
+                    "failed path validation does not change recent destinations"
+                );
             }
             assert!(!device.join("missing").exists());
             #[cfg(unix)]
@@ -608,6 +617,11 @@ fn choose_folder_rejects_invalid_destinations_and_copies_into_a_confined_directo
                         crate::app::BrowserEvent::TransferStarted { .. }
                     )),
                     "a symlink escape is rejected before dispatch"
+                );
+                assert_eq!(
+                    preferences.send_to_recent_destinations(device_id),
+                    original_recents,
+                    "a rejected symlink escape does not change recent destinations"
                 );
             }
 
@@ -659,6 +673,13 @@ fn choose_folder_revalidates_device_while_the_dialog_is_open() {
             let device = fixture.path().join("device");
             std::fs::write(&source, b"source").expect("source file");
             std::fs::create_dir_all(device.join("folder")).expect("device folder");
+            let preferences = crate::ui::preferences::PreferenceManager::shared();
+            preferences.remember_send_to_destination(
+                "volume:removed-device",
+                Path::new("Previously used"),
+                None,
+            );
+            let original_recents = preferences.send_to_recent_destinations("volume:removed-device");
             let view = crate::ui::browser::BrowserView::new(
                 Rc::new(crate::adapters::LocalFileSource),
                 crate::ui::browser::PeekBehavior::default(),
@@ -703,6 +724,11 @@ fn choose_folder_revalidates_device_while_the_dialog_is_open() {
                 "a removed device cannot dispatch a transfer"
             );
             assert!(!device.join("folder/source.txt").exists());
+            assert_eq!(
+                preferences.send_to_recent_destinations("volume:removed-device"),
+                original_recents,
+                "a device removed while the chooser is open does not change its recent destinations"
+            );
             view.browser().clear_observer();
             window.destroy();
         },
