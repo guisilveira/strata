@@ -388,6 +388,7 @@ fn scope_crumb_label(
 fn confined_destination_crumbs(
     resolved: &Path,
     root: &Path,
+    canonical_root: Option<&Path>,
     root_label: Option<&str>,
 ) -> Vec<DestinationCrumb> {
     let root_name = || {
@@ -399,7 +400,7 @@ fn confined_destination_crumbs(
             })
             .unwrap_or_else(|| root.to_string_lossy().into_owned())
     };
-    let Some(canonical_root) = canonical_existing_directory(root) else {
+    let Some(canonical_root) = canonical_root else {
         // A stale device root falls back to the safe root crumb. It is a
         // Scope crumb rather than Current: the entry does not represent
         // this root, and clicking it restores valid browse mode.
@@ -409,13 +410,19 @@ fn confined_destination_crumbs(
             kind: DestinationCrumbKind::Scope,
         }];
     };
-    let Some(canonical) = canonical_directory_within(&canonical_root, resolved) else {
+    let canonical_root = canonical_root.to_path_buf();
+    // Only the candidate is canonicalized per rebuild; the root was resolved
+    // once when the dialog opened. Containment here is presentation-only:
+    // confirmation re-validates against the current device root.
+    let Some(canonical) = canonical_existing_directory(resolved)
+        .filter(|candidate| candidate.strip_prefix(&canonical_root).is_ok())
+    else {
         // Anything unresolvable or outside the root falls back to the safe
         // root crumb instead of exposing ancestors outside it. Scope, not
         // Current: the entry does not represent this root.
         return vec![DestinationCrumb {
             label: root_name(),
-            target: canonical_root,
+            target: canonical_root.clone(),
             kind: DestinationCrumbKind::Scope,
         }];
     };
@@ -473,6 +480,7 @@ fn destination_crumbs(
     base: &Path,
     search_root: &Path,
     root_limit: Option<&Path>,
+    canonical_root: Option<&Path>,
     root_label: Option<&str>,
     home: &Path,
 ) -> Vec<DestinationCrumb> {
@@ -485,7 +493,7 @@ fn destination_crumbs(
     }
     let resolved = resolve_destination_path(input, base, home);
     if let Some(root) = root_limit {
-        confined_destination_crumbs(&resolved, root, root_label)
+        confined_destination_crumbs(&resolved, root, canonical_root, root_label)
     } else {
         lexical_destination_crumbs(&resolved, home)
     }
@@ -499,6 +507,7 @@ pub(super) struct DestinationLocationBar {
     base: std::path::PathBuf,
     search_root: std::path::PathBuf,
     root_limit: Option<std::path::PathBuf>,
+    canonical_root: Option<std::path::PathBuf>,
     root_label: Option<String>,
     edit_start_text: RefCell<String>,
     last_navigable: RefCell<Option<gtk::Button>>,
@@ -529,6 +538,9 @@ impl DestinationLocationBar {
         stack.add_named(&crumb_scroll, Some(BROWSE_CHILD));
         stack.add_named(&field, Some(EDIT_CHILD));
         stack.set_visible_child_name(BROWSE_CHILD);
+        // The device root is immutable for the dialog's lifetime; resolving
+        // it once keeps per-keystroke rebuilds to a single candidate check.
+        let canonical_root = root_limit.as_deref().and_then(canonical_existing_directory);
         let bar = Rc::new(Self {
             stack,
             crumbs,
@@ -537,6 +549,7 @@ impl DestinationLocationBar {
             base,
             search_root,
             root_limit,
+            canonical_root,
             root_label,
             edit_start_text: RefCell::new(String::new()),
             last_navigable: RefCell::new(None),
@@ -651,6 +664,7 @@ impl DestinationLocationBar {
             &self.base,
             &self.search_root,
             self.root_limit.as_deref(),
+            self.canonical_root.as_deref(),
             self.root_label.as_deref(),
             &home,
         );

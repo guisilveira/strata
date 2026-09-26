@@ -1021,33 +1021,6 @@ fn choose_folder_breadcrumbs_navigate_to_ancestor() {
     );
 }
 
-fn write_minimal_tar_member(archive: &Path, name: &str, contents: &[u8]) {
-    let mut header = [0u8; 512];
-    let name_bytes = name.as_bytes();
-    header[..name_bytes.len()].copy_from_slice(name_bytes);
-    header[100..108].copy_from_slice(b"0000644\0");
-    header[108..116].copy_from_slice(b"0000000\0");
-    header[116..124].copy_from_slice(b"0000000\0");
-    let size = format!("{:011o}\0", contents.len());
-    header[124..136].copy_from_slice(size.as_bytes());
-    header[136..148].copy_from_slice(b"00000000000\0");
-    header[148..156].copy_from_slice(b"        ");
-    header[156] = b'0';
-    header[257..263].copy_from_slice(b"ustar\0");
-    header[263..265].copy_from_slice(b"00");
-    let checksum: u32 = header.iter().map(|byte| u32::from(*byte)).sum();
-    let checksum = format!("{checksum:06o}\0 ");
-    header[148..156].copy_from_slice(checksum.as_bytes());
-    let mut archive = std::fs::File::create(archive).expect("archive file");
-    use std::io::Write;
-    archive.write_all(&header).expect("archive header");
-    archive.write_all(contents).expect("archive contents");
-    let padding = (512 - contents.len() % 512) % 512;
-    archive
-        .write_all(&vec![0u8; padding + 1024])
-        .expect("archive padding");
-}
-
 #[test]
 fn choose_folder_location_bar_switches_presentations() {
     crate::test_support::gtk_test(
@@ -1325,7 +1298,13 @@ fn extract_to_focused_enter_extracts_destination() {
             std::fs::create_dir_all(&destination).expect("destination directory");
             std::fs::write(work.join("notes.txt"), b"notes").expect("archived file");
             let archive = work.join("bundle.tar");
-            write_minimal_tar_member(&archive, "notes.txt", b"notes");
+            crate::adapters::write_compression_fixture(
+                &archive,
+                &[work.join("notes.txt")],
+                crate::services::ArchiveFormat::Tar,
+                None,
+            )
+            .expect("fixture archive");
             let (view, overlay, window, _events) = open_transfer_browser(&work);
             view.state.show_extract_to_dialog(transfer_entry(&archive));
             assert!(wait_for_modal_layer(&overlay), "Extract dialog opens");
@@ -1338,12 +1317,13 @@ fn extract_to_focused_enter_extracts_destination() {
             field.set_text(&destination.to_string_lossy());
             field.emit_by_name::<()>("activate", &[]);
             wait_until(
-                || destination.join("notes.txt").exists(),
-                "focused Enter extracts into the destination",
-            );
-            wait_until(
-                || find_widget_with_class(&overlay, "app-modal-layer").is_none(),
-                "a successful extraction closes its dialog",
+                || {
+                    std::fs::read_to_string(destination.join("notes.txt")).is_ok_and(|contents| {
+                        contents == "notes"
+                            && find_widget_with_class(&overlay, "app-modal-layer").is_none()
+                    })
+                },
+                "focused Enter extracts the archived contents and closes its dialog",
             );
             view.browser().clear_observer();
             window.destroy();
@@ -1719,6 +1699,57 @@ fn send_to_repeated_completions_replace_toast() {
                 send_to_toast_labels(&overlay),
                 ["2 items copied to VANIA"],
                 "the second success replaces the first notice"
+            );
+            view.browser().clear_observer();
+            window.destroy();
+        },
+    );
+}
+
+#[test]
+fn superseded_send_to_shows_no_success_feedback() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::superseded_send_to_shows_no_success_feedback",
+        || {
+            let SendToToastFixture {
+                _tempdir: _keepalive,
+                view,
+                overlay,
+                window,
+                events,
+                source_dir,
+                device,
+            } = open_send_to_toast_browser("superseded send-to fixture", &["a.txt", "b.txt"]);
+            std::fs::create_dir_all(device.join("other")).expect("plain destination");
+            let device_root = device.clone();
+            // A dispatches a Send-to, then B immediately supersedes it with a
+            // normal copy before either completes. B's successful completion
+            // must not display A's Send-to feedback.
+            view.state.send_to_removable_device_with_resolver(
+                "volume:toast-device",
+                vec![Location::local(source_dir.join("a.txt"))],
+                {
+                    let device_root = device_root.clone();
+                    move |id| (id == "volume:toast-device").then(|| device_root.clone())
+                },
+            );
+            view.state.start_transfer(
+                Location::local(device.join("other")),
+                vec![Location::local(source_dir.join("b.txt"))],
+                false,
+            );
+            wait_until(
+                || {
+                    device.join("other/b.txt").exists()
+                        && events.borrow().iter().any(|event| {
+                            matches!(event, crate::app::BrowserEvent::TransferFinished { .. })
+                        })
+                },
+                "the superseding copy completes",
+            );
+            assert!(
+                send_to_toast_labels(&overlay).is_empty(),
+                "a superseded Send-to never attributes feedback to the later transfer"
             );
             view.browser().clear_observer();
             window.destroy();

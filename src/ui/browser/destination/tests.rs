@@ -15,7 +15,7 @@ fn nested_home_path_orders_ancestors_with_current_last() {
     let fixture = tempfile::tempdir().expect("breadcrumb fixture");
     let home = fixture.path().join("home");
 
-    let crumbs = destination_crumbs("~/Projects/strata/", &home, &home, None, None, &home);
+    let crumbs = destination_crumbs("~/Projects/strata/", &home, &home, None, None, None, &home);
 
     assert_eq!(crumb_labels(&crumbs), ["~", "Projects", "strata"]);
     assert_eq!(
@@ -34,7 +34,7 @@ fn nested_home_path_orders_ancestors_with_current_last() {
 fn absolute_path_outside_home_starts_at_fs_root() {
     let home = Path::new("/home/example");
 
-    let crumbs = destination_crumbs("/tmp/share/", home, home, None, None, home);
+    let crumbs = destination_crumbs("/tmp/share/", home, home, None, None, None, home);
 
     assert_eq!(crumb_labels(&crumbs), ["/", "tmp", "share"]);
     assert_eq!(
@@ -56,6 +56,7 @@ fn confined_nested_path_starts_at_device_root() -> Result<(), Box<dyn std::error
         &root,
         &root,
         Some(&root),
+        Some(&canonical_root),
         Some("VANIA"),
         Path::new("/home/example"),
     );
@@ -88,6 +89,7 @@ fn confined_root_yields_single_current_crumb() -> Result<(), Box<dyn std::error:
         &root,
         &root,
         Some(&root),
+        Some(&canonical_root),
         Some("VANIA"),
         Path::new("/home/example"),
     );
@@ -116,6 +118,7 @@ fn escape_attempts_fall_back_to_device_root() -> Result<(), Box<dyn std::error::
             &root,
             &root,
             Some(&root),
+            Some(&canonical_root),
             Some("VANIA"),
             Path::new("/home/example"),
         );
@@ -143,6 +146,7 @@ fn escaping_symlink_falls_back_to_device_root() -> Result<(), Box<dyn std::error
         &root,
         &root,
         Some(&root),
+        Some(&canonical_root),
         Some("VANIA"),
         Path::new("/home/example"),
     );
@@ -164,6 +168,7 @@ fn fuzzy_send_to_shows_scope_root() -> Result<(), Box<dyn std::error::Error>> {
         &root,
         &root,
         Some(&root),
+        None,
         Some("VANIA"),
         Path::new("/home/example"),
     );
@@ -179,7 +184,7 @@ fn fuzzy_send_to_shows_scope_root() -> Result<(), Box<dyn std::error::Error>> {
 fn fuzzy_unconfined_search_shows_home_scope() {
     let home = Path::new("/home/example");
 
-    let crumbs = destination_crumbs("Photos", home, home, None, None, home);
+    let crumbs = destination_crumbs("Photos", home, home, None, None, None, home);
 
     assert_eq!(crumbs.len(), 1);
     assert_eq!(crumbs[0].label, "~");

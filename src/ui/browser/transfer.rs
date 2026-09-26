@@ -543,6 +543,10 @@ impl ViewState {
                     self.drop_active_depths
                         .set(source_depth.zip(destination_depth));
                 }
+                // A new dispatch abandons any previous operation, so stale
+                // completion state must not leak into this transfer's outcome.
+                self.pending_send_to_completion.take();
+                self.finished_send_to_completion.take();
                 if let Some(send_to) = send_to {
                     self.pending_send_to_completion
                         .replace(Some(PendingSendToCompletion {
