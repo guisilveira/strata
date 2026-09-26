@@ -31,11 +31,7 @@ fn set_destination_entry(field: &gtk::Entry, path: &Path) {
     field.grab_focus();
 }
 
-/// Hands focus from the destination entry to its confirmation button before
-/// modal teardown so the entry's internal GtkText receives focus-out. This
-/// reproduces the natural focus transition of a physical confirmation click.
-/// GtkEntry delegates keyboard focus to its internal GtkText, so the entry
-/// itself never reports focused; toplevel focus containment is the guard.
+// GtkEntry delegates focus to GtkText; move focus before modal teardown.
 pub(super) fn hand_off_destination_focus(field: &gtk::Entry, confirm: &gtk::Button) {
     let entry_focused = field.has_focus()
         || field
@@ -401,9 +397,6 @@ fn confined_destination_crumbs(
             .unwrap_or_else(|| root.to_string_lossy().into_owned())
     };
     let Some(canonical_root) = canonical_root else {
-        // A stale device root falls back to the safe root crumb. It is a
-        // Scope crumb rather than Current: the entry does not represent
-        // this root, and clicking it restores valid browse mode.
         return vec![DestinationCrumb {
             label: root_name(),
             target: root.to_path_buf(),
@@ -411,15 +404,10 @@ fn confined_destination_crumbs(
         }];
     };
     let canonical_root = canonical_root.to_path_buf();
-    // Only the candidate is canonicalized per rebuild; the root was resolved
-    // once when the dialog opened. Containment here is presentation-only:
-    // confirmation re-validates against the current device root.
+    // Confirmation re-validates against the current device root.
     let Some(canonical) = canonical_existing_directory(resolved)
         .filter(|candidate| candidate.strip_prefix(&canonical_root).is_ok())
     else {
-        // Anything unresolvable or outside the root falls back to the safe
-        // root crumb instead of exposing ancestors outside it. Scope, not
-        // Current: the entry does not represent this root.
         return vec![DestinationCrumb {
             label: root_name(),
             target: canonical_root.clone(),
@@ -538,8 +526,6 @@ impl DestinationLocationBar {
         stack.add_named(&crumb_scroll, Some(BROWSE_CHILD));
         stack.add_named(&field, Some(EDIT_CHILD));
         stack.set_visible_child_name(BROWSE_CHILD);
-        // The device root is immutable for the dialog's lifetime; resolving
-        // it once keeps per-keystroke rebuilds to a single candidate check.
         let canonical_root = root_limit.as_deref().and_then(canonical_existing_directory);
         let bar = Rc::new(Self {
             stack,
@@ -579,9 +565,6 @@ impl DestinationLocationBar {
             keys.connect_key_pressed(move |_, key, _, state| keys_bar.handle_key(key, state));
             bar.field.add_controller(keys);
         }
-        // The outer bar owns the error chrome, so mirror the entry's error
-        // state onto it. Every validation path already toggles the entry's
-        // error class, which funnels through this single hook.
         {
             let error_bar = bar.clone();
             bar.field.connect_css_classes_notify(move |field| {
@@ -617,8 +600,6 @@ impl DestinationLocationBar {
     }
 
     pub(super) fn cancel_edit(&self) {
-        // Restoring the text re-runs the existing changed machinery, which
-        // rebuilds breadcrumbs and suggestions from the restored path.
         self.field.set_text(&self.edit_start_text.borrow().clone());
         self.show_browse();
         self.focus_browse();
@@ -679,8 +660,6 @@ impl DestinationLocationBar {
             }
             match crumb.kind {
                 DestinationCrumbKind::Current => {
-                    // The current crumb is not a navigation button, but it is
-                    // the visible affordance for entering edit mode.
                     let current = gtk::Box::new(gtk::Orientation::Horizontal, 2);
                     current.add_css_class("current-breadcrumb");
                     let view = gtk::Button::with_label(&crumb.label);

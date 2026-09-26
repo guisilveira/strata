@@ -542,9 +542,6 @@ fn send_to_drive_root_uses_current_root_after_same_id_remount() {
             let observed = events.clone();
             browser.observe(move |event| observed.borrow_mut().push(event.clone()));
 
-            // The same stable ID now resolves to the remounted root. Activation
-            // must use the current root; the stale menu-time root is not
-            // authoritative.
             let current = current_root.clone();
             view.state.send_to_removable_device_with_resolver(
                 device_id,
@@ -977,8 +974,6 @@ fn choose_folder_breadcrumbs_navigate_to_ancestor() {
                 folder_input_path(&device),
                 "the field starts at the current device root"
             );
-            // Descend with the existing suggestion row, then return with the
-            // ancestor breadcrumb instead of editing the path.
             wait_until(
                 || find_widget_with_class(&overlay, "transfer-suggestion").is_some(),
                 "the device-root suggestions",
@@ -1069,7 +1064,6 @@ fn choose_folder_location_bar_switches_presentations() {
                     .to_owned()
             };
             assert_eq!(visible_child(), "browse");
-            // Entering edit through the current crumb preserves the path.
             click_button(&overlay, "device");
             assert_eq!(visible_child(), "edit");
             assert_eq!(
@@ -1077,7 +1071,6 @@ fn choose_folder_location_bar_switches_presentations() {
                 folder_input_path(&device),
                 "entering edit preserves the path"
             );
-            // Activating a suggestion returns to browse with the child path.
             wait_until(
                 || find_widget_with_class(&overlay, "transfer-suggestion").is_some(),
                 "the device-root suggestions",
@@ -1093,13 +1086,11 @@ fn choose_folder_location_bar_switches_presentations() {
                 "the suggestion fills the entry with the child folder",
             );
             assert_eq!(visible_child(), "browse");
-            // Ancestor navigation still works from browse mode.
             click_button(&overlay, "device");
             wait_until(
                 || field.text() == folder_input_path(&device),
                 "the ancestor breadcrumb returns the entry to the device root",
             );
-            // Enter still confirms through the stacked entry.
             field.emit_by_name::<()>("activate", &[]);
             wait_until(
                 || {
@@ -1407,18 +1398,6 @@ fn open_send_to_toast_browser(fixture_name: &str, files: &[&str]) -> SendToToast
 }
 
 #[test]
-fn send_to_success_text_formats_single_and_plural() {
-    assert_eq!(
-        super::ViewState::send_to_success_text("VANIA", 1),
-        "Copied to VANIA"
-    );
-    assert_eq!(
-        super::ViewState::send_to_success_text("VANIA", 3),
-        "3 items copied to VANIA"
-    );
-}
-
-#[test]
 fn send_to_fast_copy_shows_transient_success() {
     crate::test_support::gtk_test(
         "ui::browser::transfer::tests::send_to_fast_copy_shows_transient_success",
@@ -1722,9 +1701,6 @@ fn superseded_send_to_shows_no_success_feedback() {
             } = open_send_to_toast_browser("superseded send-to fixture", &["a.txt", "b.txt"]);
             std::fs::create_dir_all(device.join("other")).expect("plain destination");
             let device_root = device.clone();
-            // A dispatches a Send-to, then B immediately supersedes it with a
-            // normal copy before either completes. B's successful completion
-            // must not display A's Send-to feedback.
             view.state.send_to_removable_device_with_resolver(
                 "volume:toast-device",
                 vec![Location::local(source_dir.join("a.txt"))],

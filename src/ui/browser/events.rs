@@ -642,9 +642,7 @@ impl ViewState {
                 if !moved_locations.is_empty() {
                     self.complete_cut_transfer(moved_locations);
                 }
-                // Read before dismissal destroys the evidence, and stash the
-                // decision: only a later successful completion earns feedback.
-                // `TransferFinished` also fires for failed transfers.
+                // TransferFinished also fires on failure; defer feedback until TransferCompleted.
                 if let Some(completion) = self.pending_send_to_completion.take() {
                     let progress_shown = self.file_progress_view.borrow().is_some();
                     self.finished_send_to_completion
