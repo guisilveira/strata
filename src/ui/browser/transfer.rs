@@ -1020,14 +1020,16 @@ impl ViewState {
         };
         let (icon, title, confirm_label) = match &completion {
             TransferDialogCompletion::CopyMove { move_sources: true } => {
-                (crate::assets::icons::FOLDER, "Move to", "Move here")
+                (crate::assets::icons::FOLDER_INPUT, "Move to", "Move here")
             }
             TransferDialogCompletion::CopyMove {
                 move_sources: false,
-            } => (crate::assets::icons::COPY, "Copy to", "Copy here"),
-            TransferDialogCompletion::SendTo { .. } => {
-                (crate::assets::icons::COPY, "Send to", "Copy here")
-            }
+            } => (crate::assets::icons::FOLDER_OUTPUT, "Copy to", "Copy here"),
+            TransferDialogCompletion::SendTo { .. } => (
+                crate::assets::icons::SEND_HORIZONTAL,
+                "Send to",
+                "Copy here",
+            ),
         };
         let layout = modal_layout(
             icon,

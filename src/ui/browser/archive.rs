@@ -76,6 +76,7 @@ impl ViewState {
     ///   still dismiss.
     fn build_archive_modal(
         self: &Rc<Self>,
+        icon: &str,
         title: &str,
         subtitle: &str,
         confirm_label: &str,
@@ -89,12 +90,7 @@ impl ViewState {
             return (gtk::Box::default(), gtk::Button::default(), Rc::new(|| {}));
         };
 
-        let layout = modal_layout(
-            crate::assets::icons::FILE_ARCHIVE,
-            title,
-            subtitle,
-            confirm_label,
-        );
+        let layout = modal_layout(icon, title, subtitle, confirm_label);
         let layer = modal_layer(
             &layout.content,
             &window_overlay,
@@ -309,6 +305,7 @@ impl ViewState {
         let dirty_password = password_entry.clone();
         let dirty_confirm = confirm_entry.clone();
         let (body, confirm, dismiss) = self.build_archive_modal(
+            crate::assets::icons::PACKAGE_PLUS,
             &title,
             &subtitle,
             "Compress",
@@ -492,6 +489,7 @@ impl ViewState {
         let extract_initial_text = folder_input_path(&base);
         let dirty_field = field.clone();
         let (body, confirm, dismiss) = self.build_archive_modal(
+            crate::assets::icons::FOLDER_ARCHIVE,
             "Extract to",
             &entry.display_name,
             "Extract here",
@@ -595,6 +593,7 @@ impl ViewState {
         password_entry.set_show_peek_icon(true);
         let dirty_password = password_entry.clone();
         let (body, confirm, dismiss) = self.build_archive_modal(
+            crate::assets::icons::FILE_ARCHIVE,
             "Extract",
             &entry.display_name,
             "Extract",
