@@ -31,6 +31,23 @@ fn set_destination_entry(field: &gtk::Entry, path: &Path) {
     field.grab_focus();
 }
 
+/// Hands focus from the destination entry to its confirmation button before
+/// modal teardown so the entry's internal GtkText receives focus-out. This
+/// reproduces the natural focus transition of a physical confirmation click.
+/// GtkEntry delegates keyboard focus to its internal GtkText, so the entry
+/// itself never reports focused; toplevel focus containment is the guard.
+pub(super) fn hand_off_destination_focus(field: &gtk::Entry, confirm: &gtk::Button) {
+    let entry_focused = field.has_focus()
+        || field
+            .root()
+            .and_downcast::<gtk::Window>()
+            .and_then(|window| gtk::prelude::GtkWindowExt::focus(&window))
+            .is_some_and(|focus| focus.is_ancestor(field));
+    if entry_focused {
+        confirm.grab_focus();
+    }
+}
+
 fn render_transfer_suggestions(
     suggestions: &gtk::Box,
     items: Vec<crate::services::SearchItem>,

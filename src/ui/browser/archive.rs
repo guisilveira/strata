@@ -19,8 +19,8 @@ use crate::model::{FileEntry, Location};
 use crate::services::{ArchiveFormat, TransferConflict, validate_basename};
 use crate::ui::browser::ViewState;
 use crate::ui::browser::destination::{
-    DestinationLocationBar, TransferSearchScope, folder_input_path, resolve_destination_path,
-    setup_transfer_search,
+    DestinationLocationBar, TransferSearchScope, folder_input_path, hand_off_destination_focus,
+    resolve_destination_path, setup_transfer_search,
 };
 use crate::ui::browser::entry::{entry_kind_summary, item_count_label};
 use crate::ui::browser::paths::compact_display_path;
@@ -550,7 +550,7 @@ impl ViewState {
         let confirm_base = base.clone();
         let extract_entry = entry.clone();
         let dismiss_for_confirm = dismiss.clone();
-        confirm.connect_clicked(move |_| {
+        confirm.connect_clicked(move |button| {
             let path =
                 resolve_destination_path(&confirm_field.text(), &confirm_base, &glib::home_dir());
             if path.exists() && !path.is_dir() {
@@ -571,6 +571,7 @@ impl ViewState {
             extract_state
                 .browser
                 .extract(extract_entry.clone(), dest, false, None);
+            hand_off_destination_focus(&confirm_field, button);
             dismiss_for_confirm();
         });
 

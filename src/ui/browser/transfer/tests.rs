@@ -1018,6 +1018,33 @@ fn choose_folder_breadcrumbs_navigate_to_ancestor() {
     );
 }
 
+fn write_minimal_tar_member(archive: &Path, name: &str, contents: &[u8]) {
+    let mut header = [0u8; 512];
+    let name_bytes = name.as_bytes();
+    header[..name_bytes.len()].copy_from_slice(name_bytes);
+    header[100..108].copy_from_slice(b"0000644\0");
+    header[108..116].copy_from_slice(b"0000000\0");
+    header[116..124].copy_from_slice(b"0000000\0");
+    let size = format!("{:011o}\0", contents.len());
+    header[124..136].copy_from_slice(size.as_bytes());
+    header[136..148].copy_from_slice(b"00000000000\0");
+    header[148..156].copy_from_slice(b"        ");
+    header[156] = b'0';
+    header[257..263].copy_from_slice(b"ustar\0");
+    header[263..265].copy_from_slice(b"00");
+    let checksum: u32 = header.iter().map(|byte| u32::from(*byte)).sum();
+    let checksum = format!("{checksum:06o}\0 ");
+    header[148..156].copy_from_slice(checksum.as_bytes());
+    let mut archive = std::fs::File::create(archive).expect("archive file");
+    use std::io::Write;
+    archive.write_all(&header).expect("archive header");
+    archive.write_all(contents).expect("archive contents");
+    let padding = (512 - contents.len() % 512) % 512;
+    archive
+        .write_all(&vec![0u8; padding + 1024])
+        .expect("archive padding");
+}
+
 #[test]
 fn choose_folder_location_bar_switches_presentations() {
     crate::test_support::gtk_test(
@@ -1108,6 +1135,213 @@ fn choose_folder_location_bar_switches_presentations() {
                 "Enter confirms the breadcrumb-selected destination",
             );
             assert!(source.exists(), "sources remain in place");
+            view.browser().clear_observer();
+            window.destroy();
+        },
+    );
+}
+
+fn focused_enter_destination_fixture(
+    name: &str,
+) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let fixture = tempfile::tempdir().expect(name);
+    let source_dir = fixture.path().join("source");
+    let destination = fixture.path().join("destination");
+    std::fs::create_dir_all(&source_dir).expect("source directory");
+    std::fs::create_dir_all(&destination).expect("destination directory");
+    std::fs::write(source_dir.join("photo.txt"), b"photo").expect("source file");
+    (fixture, source_dir, destination)
+}
+
+fn destination_entry_owns_focus(field: &gtk::Entry, window: &gtk::Window) -> bool {
+    // GtkEntry delegates keyboard focus to its internal GtkText, so the
+    // entry itself never reports focused; match toplevel focus instead.
+    gtk::prelude::GtkWindowExt::focus(window).is_some_and(|focus| focus.is_ancestor(field))
+}
+
+fn open_transfer_browser(
+    source_dir: &std::path::Path,
+) -> (
+    crate::ui::browser::BrowserView,
+    gtk::Overlay,
+    gtk::Window,
+    Rc<RefCell<Vec<crate::app::BrowserEvent>>>,
+) {
+    let view = crate::ui::browser::BrowserView::new(
+        Rc::new(crate::adapters::LocalFileSource),
+        crate::ui::browser::PeekBehavior::default(),
+    );
+    view.set_operation_provider(Rc::new(crate::adapters::LocalOperationProvider));
+    view.navigate_location(Location::local(source_dir));
+    let overlay = view.overlay();
+    let window = gtk::Window::builder().child(&overlay).build();
+    window.present();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let observed = events.clone();
+    view.browser()
+        .observe(move |event| observed.borrow_mut().push(event.clone()));
+    (view, overlay, window, events)
+}
+
+#[test]
+fn copy_to_focused_enter_confirms_destination() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::copy_to_focused_enter_confirms_destination",
+        || {
+            let (_fixture, source_dir, destination) =
+                focused_enter_destination_fixture("copy focused-enter fixture");
+            let source = source_dir.join("photo.txt");
+            let (view, overlay, window, events) = open_transfer_browser(&source_dir);
+            view.state
+                .show_transfer_dialog(vec![transfer_entry(&source)], false);
+            assert!(wait_for_modal_layer(&overlay), "Copy dialog opens");
+            let field = destination_field(&overlay);
+            click_button(&overlay, "source");
+            wait_until(
+                || destination_entry_owns_focus(&field, &window),
+                "the entry owns focus on the Enter path",
+            );
+            field.set_text(&destination.to_string_lossy());
+            field.emit_by_name::<()>("activate", &[]);
+            wait_until(
+                || {
+                    destination.join("photo.txt").exists()
+                        && events.borrow().iter().any(|event| {
+                            matches!(event, crate::app::BrowserEvent::TransferFinished { .. })
+                        })
+                },
+                "focused Enter copies to the destination",
+            );
+            assert!(source.exists(), "Copy leaves its source");
+            assert_eq!(
+                view.browser().active_location(),
+                Some(Location::local(&destination)),
+                "Copy navigates to its destination"
+            );
+            view.browser().clear_observer();
+            window.destroy();
+        },
+    );
+}
+
+#[test]
+fn move_to_focused_enter_confirms_destination() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::move_to_focused_enter_confirms_destination",
+        || {
+            let (_fixture, source_dir, destination) =
+                focused_enter_destination_fixture("move focused-enter fixture");
+            let source = source_dir.join("photo.txt");
+            let (view, overlay, window, events) = open_transfer_browser(&source_dir);
+            view.state
+                .show_transfer_dialog(vec![transfer_entry(&source)], true);
+            assert!(wait_for_modal_layer(&overlay), "Move dialog opens");
+            let field = destination_field(&overlay);
+            click_button(&overlay, "source");
+            wait_until(
+                || destination_entry_owns_focus(&field, &window),
+                "the entry owns focus on the Enter path",
+            );
+            field.set_text(&destination.to_string_lossy());
+            field.emit_by_name::<()>("activate", &[]);
+            wait_until(
+                || {
+                    destination.join("photo.txt").exists()
+                        && events.borrow().iter().any(|event| {
+                            matches!(event, crate::app::BrowserEvent::TransferFinished { .. })
+                        })
+                },
+                "focused Enter moves to the destination",
+            );
+            assert!(!source.exists(), "Move removes its source");
+            view.browser().clear_observer();
+            window.destroy();
+        },
+    );
+}
+
+#[test]
+fn send_to_focused_enter_copies_to_device_root() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::send_to_focused_enter_copies_to_device_root",
+        || {
+            let (_fixture, source_dir, device) =
+                focused_enter_destination_fixture("send-to focused-enter fixture");
+            let source = source_dir.join("photo.txt");
+            let (view, overlay, window, events) = open_transfer_browser(&source_dir);
+            let device_id = "volume:focused-enter-device";
+            let root = device.clone();
+            view.state.show_send_to_folder_dialog_with_resolver(
+                device_id.to_owned(),
+                vec![Location::local(&source)],
+                Rc::new(move |id| (id == device_id).then(|| root.clone())),
+            );
+            assert!(wait_for_modal_layer(&overlay), "Choose folder dialog opens");
+            let field = destination_field(&overlay);
+            click_button(&overlay, "destination");
+            wait_until(
+                || destination_entry_owns_focus(&field, &window),
+                "the entry owns focus on the Enter path",
+            );
+            field.set_text("");
+            assert!(
+                destination_entry_owns_focus(&field, &window),
+                "clearing the entry keeps focus for the Enter path"
+            );
+            field.emit_by_name::<()>("activate", &[]);
+            wait_until(
+                || {
+                    device.join("photo.txt").exists()
+                        && events.borrow().iter().any(|event| {
+                            matches!(event, crate::app::BrowserEvent::TransferFinished { .. })
+                        })
+                },
+                "focused Enter copies the empty path to the device root",
+            );
+            assert!(source.exists(), "sources remain in place");
+            assert_eq!(
+                view.browser().active_location(),
+                Some(Location::local(&source_dir)),
+                "Send to does not navigate to its destination"
+            );
+            view.browser().clear_observer();
+            window.destroy();
+        },
+    );
+}
+
+#[test]
+fn extract_to_focused_enter_extracts_destination() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::extract_to_focused_enter_extracts_destination",
+        || {
+            let fixture = tempfile::tempdir().expect("extract focused-enter fixture");
+            let work = fixture.path().join("work");
+            let destination = fixture.path().join("destination");
+            std::fs::create_dir_all(&work).expect("work directory");
+            std::fs::create_dir_all(&destination).expect("destination directory");
+            std::fs::write(work.join("notes.txt"), b"notes").expect("archived file");
+            let archive = work.join("bundle.tar");
+            write_minimal_tar_member(&archive, "notes.txt", b"notes");
+            let (view, overlay, window, _events) = open_transfer_browser(&work);
+            view.state.show_extract_to_dialog(transfer_entry(&archive));
+            assert!(wait_for_modal_layer(&overlay), "Extract dialog opens");
+            let field = destination_field(&overlay);
+            click_button(&overlay, "work");
+            wait_until(
+                || destination_entry_owns_focus(&field, &window),
+                "the entry owns focus on the Enter path",
+            );
+            field.set_text(&destination.to_string_lossy());
+            field.emit_by_name::<()>("activate", &[]);
+            wait_until(
+                || destination.join("notes.txt").exists(),
+                "focused Enter extracts into the destination",
+            );
+            wait_until(
+                || find_widget_with_class(&overlay, "app-modal-layer").is_none(),
+                "a successful extraction closes its dialog",
+            );
             view.browser().clear_observer();
             window.destroy();
         },

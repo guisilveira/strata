@@ -9,8 +9,8 @@ use crate::services::{
 };
 use crate::ui::browser::ViewState;
 use crate::ui::browser::destination::{
-    DestinationLocationBar, TransferSearchScope, folder_input_path, resolve_destination_path,
-    setup_transfer_search,
+    DestinationLocationBar, TransferSearchScope, folder_input_path, hand_off_destination_focus,
+    resolve_destination_path, setup_transfer_search,
 };
 use crate::ui::browser::entry::item_count_label;
 use crate::ui::browser::paths::{
@@ -1085,6 +1085,7 @@ impl ViewState {
                         .remember_send_to_destination(device_id, relative_destination, None);
                 }
                 transfer_state.send_to(Location::local(destination), sources.clone());
+                hand_off_destination_focus(&confirm_field, button);
                 dismiss_modal_layer(&confirm_layer, &confirm_overlay, confirm_root.as_ref());
                 return;
             }
@@ -1133,6 +1134,7 @@ impl ViewState {
                     .collect();
                 transfer_state.pending_select.borrow_mut().extend(names);
                 transfer_state.start_transfer(Location::local(path), sources.clone(), move_sources);
+                hand_off_destination_focus(&confirm_field, button);
                 dismiss_modal_layer(&confirm_layer, &confirm_overlay, confirm_root.as_ref());
                 return;
             }
@@ -1175,6 +1177,7 @@ impl ViewState {
                             created_sources,
                             move_sources,
                         );
+                        hand_off_destination_focus(&created_field, &created_button);
                         dismiss_modal_layer(
                             &created_layer,
                             &created_overlay,
