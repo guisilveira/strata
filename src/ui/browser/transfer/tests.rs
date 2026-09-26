@@ -934,6 +934,187 @@ fn choose_folder_does_not_open_when_device_resolution_fails() {
 }
 
 #[test]
+fn choose_folder_breadcrumbs_navigate_to_ancestor() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::choose_folder_breadcrumbs_navigate_to_ancestor",
+        || {
+            let fixture = tempfile::tempdir().expect("breadcrumb fixture");
+            let source_dir = fixture.path().join("source");
+            let device = fixture.path().join("device");
+            std::fs::create_dir_all(&source_dir).expect("source directory");
+            std::fs::create_dir_all(device.join("Teaching")).expect("device subdirectory");
+            let source = source_dir.join("source.txt");
+            std::fs::write(&source, b"source").expect("source file");
+
+            let device_id = "volume:breadcrumb-device";
+            let view = crate::ui::browser::BrowserView::new(
+                Rc::new(crate::adapters::LocalFileSource),
+                crate::ui::browser::PeekBehavior::default(),
+            );
+            view.set_operation_provider(Rc::new(crate::adapters::LocalOperationProvider));
+            view.navigate_location(Location::local(&source_dir));
+            let overlay = view.overlay();
+            let window = gtk::Window::builder().child(&overlay).build();
+            window.present();
+            let events = Rc::new(RefCell::new(Vec::new()));
+            let observed = events.clone();
+            view.browser()
+                .observe(move |event| observed.borrow_mut().push(event.clone()));
+
+            let root = device.clone();
+            view.state.show_send_to_folder_dialog_with_resolver(
+                device_id.to_owned(),
+                vec![Location::local(&source)],
+                Rc::new(move |id| (id == device_id).then(|| root.clone())),
+            );
+            assert!(wait_for_modal_layer(&overlay), "Choose folder dialog opens");
+            let field = destination_field(&overlay);
+            assert_eq!(
+                field.text(),
+                folder_input_path(&device),
+                "the field starts at the current device root"
+            );
+            // Descend with the existing suggestion row, then return with the
+            // ancestor breadcrumb instead of editing the path.
+            wait_until(
+                || find_widget_with_class(&overlay, "transfer-suggestion").is_some(),
+                "the device-root suggestions",
+            );
+            find_widget_with_class(&overlay, "transfer-suggestion")
+                .expect("device-root suggestion")
+                .downcast::<gtk::Button>()
+                .expect("suggestion row")
+                .emit_clicked();
+            let teaching = device.join("Teaching");
+            wait_until(
+                || field.text() == folder_input_path(&teaching),
+                "the suggestion fills the entry with the child folder",
+            );
+            let crumb = button_with_label(&overlay, "device").expect("device-root breadcrumb");
+            crumb.emit_clicked();
+            wait_until(
+                || field.text() == folder_input_path(&device),
+                "the ancestor breadcrumb returns the entry to the device root",
+            );
+            click_button(&overlay, "Copy here");
+            wait_until(
+                || {
+                    device.join("source.txt").exists()
+                        && events.borrow().iter().any(|event| {
+                            matches!(event, crate::app::BrowserEvent::TransferFinished { .. })
+                        })
+                },
+                "the copy into the breadcrumb-selected destination",
+            );
+            assert!(source.exists(), "sources remain in place");
+            assert_eq!(
+                view.browser().active_location(),
+                Some(Location::local(&source_dir)),
+                "Send to does not navigate to its destination"
+            );
+            view.browser().clear_observer();
+            window.destroy();
+        },
+    );
+}
+
+#[test]
+fn choose_folder_location_bar_switches_presentations() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::choose_folder_location_bar_switches_presentations",
+        || {
+            let fixture = tempfile::tempdir().expect("location bar fixture");
+            let source_dir = fixture.path().join("source");
+            let device = fixture.path().join("device");
+            std::fs::create_dir_all(&source_dir).expect("source directory");
+            std::fs::create_dir_all(device.join("Teaching")).expect("device subdirectory");
+            let source = source_dir.join("source.txt");
+            std::fs::write(&source, b"source").expect("source file");
+
+            let device_id = "volume:location-bar-device";
+            let view = crate::ui::browser::BrowserView::new(
+                Rc::new(crate::adapters::LocalFileSource),
+                crate::ui::browser::PeekBehavior::default(),
+            );
+            view.set_operation_provider(Rc::new(crate::adapters::LocalOperationProvider));
+            view.navigate_location(Location::local(&source_dir));
+            let overlay = view.overlay();
+            let window = gtk::Window::builder().child(&overlay).build();
+            window.present();
+            let events = Rc::new(RefCell::new(Vec::new()));
+            let observed = events.clone();
+            view.browser()
+                .observe(move |event| observed.borrow_mut().push(event.clone()));
+
+            let root = device.clone();
+            view.state.show_send_to_folder_dialog_with_resolver(
+                device_id.to_owned(),
+                vec![Location::local(&source)],
+                Rc::new(move |id| (id == device_id).then(|| root.clone())),
+            );
+            assert!(wait_for_modal_layer(&overlay), "Choose folder dialog opens");
+            let field = destination_field(&overlay);
+            let stack = find_widget_with_class(&overlay, "destination-location-stack")
+                .expect("location stack")
+                .downcast::<gtk::Stack>()
+                .expect("stack widget");
+            let visible_child = || {
+                stack
+                    .visible_child_name()
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            assert_eq!(visible_child(), "browse");
+            // Entering edit through the current crumb preserves the path.
+            click_button(&overlay, "device");
+            assert_eq!(visible_child(), "edit");
+            assert_eq!(
+                field.text(),
+                folder_input_path(&device),
+                "entering edit preserves the path"
+            );
+            // Activating a suggestion returns to browse with the child path.
+            wait_until(
+                || find_widget_with_class(&overlay, "transfer-suggestion").is_some(),
+                "the device-root suggestions",
+            );
+            find_widget_with_class(&overlay, "transfer-suggestion")
+                .expect("device-root suggestion")
+                .downcast::<gtk::Button>()
+                .expect("suggestion row")
+                .emit_clicked();
+            let teaching = device.join("Teaching");
+            wait_until(
+                || field.text() == folder_input_path(&teaching),
+                "the suggestion fills the entry with the child folder",
+            );
+            assert_eq!(visible_child(), "browse");
+            // Ancestor navigation still works from browse mode.
+            click_button(&overlay, "device");
+            wait_until(
+                || field.text() == folder_input_path(&device),
+                "the ancestor breadcrumb returns the entry to the device root",
+            );
+            // Enter still confirms through the stacked entry.
+            field.emit_by_name::<()>("activate", &[]);
+            wait_until(
+                || {
+                    device.join("source.txt").exists()
+                        && events.borrow().iter().any(|event| {
+                            matches!(event, crate::app::BrowserEvent::TransferFinished { .. })
+                        })
+                },
+                "Enter confirms the breadcrumb-selected destination",
+            );
+            assert!(source.exists(), "sources remain in place");
+            view.browser().clear_observer();
+            window.destroy();
+        },
+    );
+}
+
+#[test]
 fn normal_copy_and_move_to_keep_home_search_creation_and_reveal() {
     crate::test_support::gtk_test(
         "ui::browser::transfer::tests::normal_copy_and_move_to_keep_home_search_creation_and_reveal",

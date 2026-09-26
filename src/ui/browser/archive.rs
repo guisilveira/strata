@@ -19,7 +19,8 @@ use crate::model::{FileEntry, Location};
 use crate::services::{ArchiveFormat, TransferConflict, validate_basename};
 use crate::ui::browser::ViewState;
 use crate::ui::browser::destination::{
-    TransferSearchScope, folder_input_path, resolve_destination_path, setup_transfer_search,
+    DestinationLocationBar, TransferSearchScope, folder_input_path, resolve_destination_path,
+    setup_transfer_search,
 };
 use crate::ui::browser::entry::{entry_kind_summary, item_count_label};
 use crate::ui::browser::paths::compact_display_path;
@@ -498,7 +499,9 @@ impl ViewState {
         );
         let field_label = form_label("Destination folder");
         body.append(&field_label);
-        body.append(&field);
+        let location_bar =
+            DestinationLocationBar::wrap(field.clone(), base.clone(), glib::home_dir(), None, None);
+        body.append(&location_bar.widget());
 
         let suggestions = gtk::Box::new(gtk::Orientation::Vertical, 2);
         suggestions.add_css_class("transfer-suggestions");
@@ -523,6 +526,7 @@ impl ViewState {
         let generation = Rc::new(Cell::new(0_u64));
         let suggestions_box = suggestions.clone();
         let extract_error = error.clone();
+        let select_bar = location_bar.clone();
         setup_transfer_search(
             &field,
             &suggestions_box,
@@ -533,6 +537,7 @@ impl ViewState {
                 root_limit: None,
                 show_hidden: self.browser.preferences().show_hidden,
             },
+            Rc::new(move |path: &Path| select_bar.select_directory(path)),
             move |field| {
                 field.remove_css_class("error");
                 extract_error.set_visible(false);
@@ -570,7 +575,7 @@ impl ViewState {
         });
 
         submit_on_enter(&body, &confirm);
-        field.grab_focus();
+        location_bar.focus_browse();
     }
 
     /// Prompts for a password after a password-capable extract failed.

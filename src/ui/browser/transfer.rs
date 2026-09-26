@@ -9,7 +9,8 @@ use crate::services::{
 };
 use crate::ui::browser::ViewState;
 use crate::ui::browser::destination::{
-    TransferSearchScope, folder_input_path, resolve_destination_path, setup_transfer_search,
+    DestinationLocationBar, TransferSearchScope, folder_input_path, resolve_destination_path,
+    setup_transfer_search,
 };
 use crate::ui::browser::entry::item_count_label;
 use crate::ui::browser::paths::{
@@ -59,6 +60,7 @@ struct TransferDialogOptions {
     base: PathBuf,
     search_root: PathBuf,
     root_limit: Option<PathBuf>,
+    root_label: Option<String>,
     allow_create: bool,
     completion: TransferDialogCompletion,
 }
@@ -827,6 +829,7 @@ impl ViewState {
                 base,
                 search_root: glib::home_dir(),
                 root_limit: None,
+                root_label: None,
                 allow_create: true,
                 completion: TransferDialogCompletion::CopyMove { move_sources },
             },
@@ -866,6 +869,10 @@ impl ViewState {
                 base: root.clone(),
                 search_root: root.clone(),
                 root_limit: Some(root.clone()),
+                root_label: crate::ui::removable_destinations()
+                    .into_iter()
+                    .find(|destination| destination.id == id)
+                    .map(|destination| destination.name),
                 allow_create: false,
                 completion: TransferDialogCompletion::SendTo {
                     device_id: id,
@@ -893,6 +900,7 @@ impl ViewState {
             base,
             search_root,
             root_limit,
+            root_label,
             allow_create,
             completion,
         } = options;
@@ -928,7 +936,14 @@ impl ViewState {
         field.set_text(&folder_input_path(&base));
         field.set_position(-1);
         layout.body.append(&field_label);
-        layout.body.append(&field);
+        let location_bar = DestinationLocationBar::wrap(
+            field.clone(),
+            base.clone(),
+            search_root.clone(),
+            root_limit.clone(),
+            root_label.clone(),
+        );
+        layout.body.append(&location_bar.widget());
 
         let suggestions = gtk::Box::new(gtk::Orientation::Vertical, 2);
         suggestions.add_css_class("transfer-suggestions");
@@ -961,6 +976,7 @@ impl ViewState {
         let suggestions_error = error.clone();
         let changed_confirm = confirm.clone();
         let changed_creation = pending_creation.clone();
+        let select_bar = location_bar.clone();
         setup_transfer_search(
             &field,
             &suggestions_box,
@@ -971,6 +987,7 @@ impl ViewState {
                 root_limit: root_limit.clone(),
                 show_hidden: self.browser.preferences().show_hidden,
             },
+            Rc::new(move |path: &Path| select_bar.select_directory(path)),
             move |field| {
                 field.remove_css_class("error");
                 suggestions_error.set_visible(false);
@@ -1223,6 +1240,6 @@ impl ViewState {
         layer.add_controller(escape);
 
         field.emit_by_name::<()>("changed", &[]);
-        field.grab_focus();
+        location_bar.focus_browse();
     }
 }
