@@ -28,8 +28,11 @@ use gtk::{gio, glib};
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
 
 type RemovableRootResolver = Rc<dyn Fn(&str) -> Option<PathBuf>>;
+
+const SEND_TO_SUCCESS_DURATION: Duration = Duration::from_secs(2);
 
 #[cfg(test)]
 mod tests;
@@ -47,6 +50,35 @@ struct TransferCollision {
     source: Location,
     /// Both colliding items are directories, so their contents can be merged.
     mergeable: bool,
+}
+
+#[derive(Clone)]
+pub(super) struct SendToTransferContext {
+    pub(super) device_name: String,
+}
+
+#[derive(Clone)]
+pub(super) struct PendingSendToCompletion {
+    pub(super) device_name: String,
+    pub(super) item_count: usize,
+}
+
+#[derive(Clone)]
+pub(super) struct FinishedSendToCompletion {
+    pub(super) completion: PendingSendToCompletion,
+    pub(super) progress_shown: bool,
+}
+
+fn send_to_display_name(id: &str, root: &Path) -> String {
+    crate::ui::removable_destinations()
+        .into_iter()
+        .find(|destination| destination.id == id)
+        .map(|destination| destination.name)
+        .or_else(|| {
+            root.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| root.to_string_lossy().into_owned())
 }
 
 /// Which non-destructive resolutions a conflict prompt offers.
@@ -267,7 +299,7 @@ impl ViewState {
         sources: Vec<Location>,
         move_sources: bool,
     ) {
-        self.start_transfer_with_reveal(destination, sources, move_sources, true);
+        self.start_transfer_with_reveal(destination, sources, move_sources, true, None);
     }
 
     pub(super) fn send_to_removable_device(self: &Rc<Self>, id: String, sources: Vec<Location>) {
@@ -292,7 +324,12 @@ impl ViewState {
             );
             return;
         };
-        self.send_to(Location::local(destination), sources);
+        let device_name = send_to_display_name(id, &destination);
+        self.send_to(
+            Location::local(destination),
+            sources,
+            SendToTransferContext { device_name },
+        );
     }
 
     pub(super) fn send_to_recent_destination(
@@ -366,11 +403,66 @@ impl ViewState {
             relative_destination,
             Some(relative),
         );
-        self.send_to(Location::local(destination), sources);
+        let device_name = send_to_display_name(id, &current_root);
+        self.send_to(
+            Location::local(destination),
+            sources,
+            SendToTransferContext { device_name },
+        );
     }
 
-    pub(super) fn send_to(self: &Rc<Self>, destination: Location, sources: Vec<Location>) {
-        self.start_transfer_with_reveal(destination, sources, false, false);
+    pub(super) fn send_to(
+        self: &Rc<Self>,
+        destination: Location,
+        sources: Vec<Location>,
+        send_to: SendToTransferContext,
+    ) {
+        self.start_transfer_with_reveal(destination, sources, false, false, Some(send_to));
+    }
+
+    fn send_to_success_text(device_name: &str, item_count: usize) -> String {
+        if item_count == 1 {
+            format!("Copied to {device_name}")
+        } else {
+            format!("{item_count} items copied to {device_name}")
+        }
+    }
+
+    /// Shows transient success feedback for a fast Send-to whose transfer
+    /// finished before the normal progress UI became visible. Replaces any
+    /// still-visible notice and restarts its dismissal timer.
+    pub(super) fn show_send_to_success(self: &Rc<Self>, device_name: &str, item_count: usize) {
+        if let Some(widget) = self.send_to_success_widget.take() {
+            self.overlay.remove_overlay(&widget);
+        }
+        let generation = self.send_to_success_generation.get().saturating_add(1);
+        self.send_to_success_generation.set(generation);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        row.add_css_class("send-to-success");
+        row.set_halign(gtk::Align::Center);
+        row.set_valign(gtk::Align::Start);
+        row.set_can_target(false);
+        let icon = crate::assets::primary_icon(crate::assets::icons::CHECK, 16);
+        icon.set_can_target(false);
+        row.append(&icon);
+        let label = gtk::Label::new(Some(&Self::send_to_success_text(device_name, item_count)));
+        label.set_can_target(false);
+        row.append(&label);
+        self.overlay.add_overlay(&row);
+        self.send_to_success_widget
+            .replace(Some(row.clone().upcast()));
+        let weak_state = Rc::downgrade(self);
+        let weak_row = row.downgrade();
+        glib::timeout_add_local_once(SEND_TO_SUCCESS_DURATION, move || {
+            let (Some(state), Some(row)) = (weak_state.upgrade(), weak_row.upgrade()) else {
+                return;
+            };
+            if state.send_to_success_generation.get() != generation {
+                return;
+            }
+            state.send_to_success_widget.take();
+            state.overlay.remove_overlay(&row);
+        });
     }
 
     fn start_drop_transfer(
@@ -380,7 +472,7 @@ impl ViewState {
         move_sources: bool,
     ) {
         let reveal = crate::ui::preferences::PreferenceManager::shared().open_folder_after_drop();
-        self.start_transfer_with_reveal(destination, sources, move_sources, reveal);
+        self.start_transfer_with_reveal(destination, sources, move_sources, reveal, None);
     }
 
     /// Paste and explicit "move/copy to" reveal their result independently of
@@ -391,6 +483,7 @@ impl ViewState {
         sources: Vec<Location>,
         move_sources: bool,
         reveal: bool,
+        send_to: Option<SendToTransferContext>,
     ) {
         if is_trash_location(&destination)
             || destination.is_recent_location()
@@ -416,7 +509,14 @@ impl ViewState {
                 }),
             }
         }
-        self.resolve_transfer_collisions(destination, collisions, accepted, move_sources, reveal);
+        self.resolve_transfer_collisions(
+            destination,
+            collisions,
+            accepted,
+            move_sources,
+            reveal,
+            send_to,
+        );
     }
 
     fn resolve_transfer_collisions(
@@ -426,6 +526,7 @@ impl ViewState {
         accepted: Vec<PasteItem>,
         move_sources: bool,
         reveal: bool,
+        send_to: Option<SendToTransferContext>,
     ) {
         if collisions.is_empty() {
             let source_depth = self
@@ -441,6 +542,13 @@ impl ViewState {
                         .position(|location| location == destination);
                     self.drop_active_depths
                         .set(source_depth.zip(destination_depth));
+                }
+                if let Some(send_to) = send_to {
+                    self.pending_send_to_completion
+                        .replace(Some(PendingSendToCompletion {
+                            device_name: send_to.device_name,
+                            item_count: accepted.len(),
+                        }));
                 }
             }
             self.browser
@@ -465,6 +573,7 @@ impl ViewState {
             )
         };
         let state = self.clone();
+        let send_to_conflict = send_to.clone();
         // Move undo/reveal assumes an unrenamed `transfer_target`.
         let apply_to_all_visible = !collisions.is_empty();
         let skip_visible = !accepted.is_empty() || !collisions.is_empty();
@@ -531,6 +640,7 @@ impl ViewState {
                     accepted,
                     move_sources,
                     reveal,
+                    send_to_conflict.clone(),
                 );
             }),
         );
@@ -1084,7 +1194,12 @@ impl ViewState {
                     crate::ui::preferences::PreferenceManager::shared()
                         .remember_send_to_destination(device_id, relative_destination, None);
                 }
-                transfer_state.send_to(Location::local(destination), sources.clone());
+                let device_name = send_to_display_name(device_id, opened_root);
+                transfer_state.send_to(
+                    Location::local(destination),
+                    sources.clone(),
+                    SendToTransferContext { device_name },
+                );
                 hand_off_destination_focus(&confirm_field, button);
                 dismiss_modal_layer(&confirm_layer, &confirm_overlay, confirm_root.as_ref());
                 return;

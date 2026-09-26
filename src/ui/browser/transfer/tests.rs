@@ -452,6 +452,9 @@ fn send_to_copies_every_source_without_reveal_or_navigation() {
             view.state.send_to(
                 Location::local(&destination),
                 vec![Location::local(&first), Location::local(&second)],
+                SendToTransferContext {
+                    device_name: "test-device".to_owned(),
+                },
             );
             wait_until(
                 || {
@@ -1341,6 +1344,381 @@ fn extract_to_focused_enter_extracts_destination() {
             wait_until(
                 || find_widget_with_class(&overlay, "app-modal-layer").is_none(),
                 "a successful extraction closes its dialog",
+            );
+            view.browser().clear_observer();
+            window.destroy();
+        },
+    );
+}
+
+fn send_to_toast_labels(overlay: &gtk::Overlay) -> Vec<String> {
+    let mut labels = Vec::new();
+    let mut stack = Vec::new();
+    let mut child = overlay.first_child();
+    while let Some(widget) = child {
+        stack.push(widget.clone());
+        child = widget.next_sibling();
+    }
+    while let Some(widget) = stack.pop() {
+        if widget.has_css_class("send-to-success") {
+            let mut inner = vec![widget.clone()];
+            while let Some(node) = inner.pop() {
+                if let Some(label) = node.downcast_ref::<gtk::Label>() {
+                    labels.push(label.label().to_string());
+                    break;
+                }
+                let mut descendant = node.first_child();
+                while let Some(next) = descendant {
+                    inner.push(next.clone());
+                    descendant = next.next_sibling();
+                }
+            }
+        }
+        let mut descendant = widget.first_child();
+        while let Some(next) = descendant {
+            stack.push(next.clone());
+            descendant = next.next_sibling();
+        }
+    }
+    labels
+}
+
+struct SendToToastFixture {
+    _tempdir: tempfile::TempDir,
+    view: crate::ui::browser::BrowserView,
+    overlay: gtk::Overlay,
+    window: gtk::Window,
+    events: Rc<RefCell<Vec<crate::app::BrowserEvent>>>,
+    source_dir: std::path::PathBuf,
+    device: std::path::PathBuf,
+}
+
+fn open_send_to_toast_browser(fixture_name: &str, files: &[&str]) -> SendToToastFixture {
+    let tempdir = tempfile::tempdir().expect(fixture_name);
+    let source_dir = tempdir.path().join("source");
+    let device = tempdir.path().join("VANIA");
+    std::fs::create_dir_all(&source_dir).expect("source directory");
+    std::fs::create_dir_all(&device).expect("device directory");
+    for name in files {
+        std::fs::write(source_dir.join(name), name.as_bytes()).expect("source file");
+    }
+    let view = crate::ui::browser::BrowserView::new(
+        Rc::new(crate::adapters::LocalFileSource),
+        crate::ui::browser::PeekBehavior::default(),
+    );
+    view.set_operation_provider(Rc::new(crate::adapters::LocalOperationProvider));
+    view.navigate_location(Location::local(&source_dir));
+    let overlay = view.overlay();
+    let window = gtk::Window::builder().child(&overlay).build();
+    window.present();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let observed = events.clone();
+    view.browser()
+        .observe(move |event| observed.borrow_mut().push(event.clone()));
+    SendToToastFixture {
+        _tempdir: tempdir,
+        view,
+        overlay,
+        window,
+        events,
+        source_dir,
+        device,
+    }
+}
+
+#[test]
+fn send_to_success_text_formats_single_and_plural() {
+    assert_eq!(
+        super::ViewState::send_to_success_text("VANIA", 1),
+        "Copied to VANIA"
+    );
+    assert_eq!(
+        super::ViewState::send_to_success_text("VANIA", 3),
+        "3 items copied to VANIA"
+    );
+}
+
+#[test]
+fn send_to_fast_copy_shows_transient_success() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::send_to_fast_copy_shows_transient_success",
+        || {
+            let SendToToastFixture {
+                _tempdir,
+                view,
+                overlay,
+                window,
+                events,
+                source_dir,
+                device,
+            } = open_send_to_toast_browser("send-to toast fixture", &["a.txt"]);
+            let device_root = device.clone();
+            view.state.send_to_removable_device_with_resolver(
+                "volume:toast-device",
+                vec![Location::local(source_dir.join("a.txt"))],
+                move |id| (id == "volume:toast-device").then(|| device_root.clone()),
+            );
+            wait_until(
+                || {
+                    device.join("a.txt").exists()
+                        && events.borrow().iter().any(|event| {
+                            matches!(event, crate::app::BrowserEvent::TransferFinished { .. })
+                        })
+                },
+                "the fast send-to copy",
+            );
+            assert_eq!(
+                send_to_toast_labels(&overlay),
+                ["Copied to VANIA"],
+                "a fast success shows the transient notice"
+            );
+            view.browser().clear_observer();
+            window.destroy();
+        },
+    );
+}
+
+#[test]
+fn send_to_plural_copy_shows_item_count() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::send_to_plural_copy_shows_item_count",
+        || {
+            let SendToToastFixture {
+                _tempdir,
+                view,
+                overlay,
+                window,
+                events,
+                source_dir,
+                device,
+            } = open_send_to_toast_browser(
+                "send-to plural toast fixture",
+                &["a.txt", "b.txt", "c.txt"],
+            );
+            let device_root = device.clone();
+            let sources = ["a.txt", "b.txt", "c.txt"]
+                .into_iter()
+                .map(|name| Location::local(source_dir.join(name)))
+                .collect();
+            view.state.send_to_removable_device_with_resolver(
+                "volume:toast-device",
+                sources,
+                move |id| (id == "volume:toast-device").then(|| device_root.clone()),
+            );
+            wait_until(
+                || {
+                    ["a.txt", "b.txt", "c.txt"]
+                        .iter()
+                        .all(|name| device.join(name).exists())
+                        && events.borrow().iter().any(|event| {
+                            matches!(event, crate::app::BrowserEvent::TransferFinished { .. })
+                        })
+                },
+                "the plural send-to copy",
+            );
+            assert_eq!(
+                send_to_toast_labels(&overlay),
+                ["3 items copied to VANIA"],
+                "a plural success counts the items"
+            );
+            view.browser().clear_observer();
+            window.destroy();
+        },
+    );
+}
+
+#[test]
+fn send_to_with_visible_progress_shows_no_toast() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::send_to_with_visible_progress_shows_no_toast",
+        || {
+            let names: Vec<String> = (0..16)
+                .map(|index| format!("file-{index:02}.txt"))
+                .collect();
+            let borrowed: Vec<&str> = names.iter().map(String::as_str).collect();
+            let SendToToastFixture {
+                _tempdir,
+                view,
+                overlay,
+                window,
+                events,
+                source_dir,
+                device,
+            } = open_send_to_toast_browser("send-to progress fixture", &borrowed);
+            let device_root = device.clone();
+            let sources = names
+                .iter()
+                .map(|name| Location::local(source_dir.join(name)))
+                .collect();
+            view.state.send_to_removable_device_with_resolver(
+                "volume:toast-device",
+                sources,
+                move |id| (id == "volume:toast-device").then(|| device_root.clone()),
+            );
+            wait_until(
+                || find_widget_with_class(&overlay, "app-modal-layer").is_some(),
+                "the progress modal",
+            );
+            wait_until(
+                || {
+                    names.iter().all(|name| device.join(name).exists())
+                        && events.borrow().iter().any(|event| {
+                            matches!(event, crate::app::BrowserEvent::TransferFinished { .. })
+                        })
+                },
+                "the progress-covered send-to copy",
+            );
+            wait_until(
+                || find_widget_with_class(&overlay, "app-modal-layer").is_none(),
+                "the progress modal closes",
+            );
+            assert!(
+                send_to_toast_labels(&overlay).is_empty(),
+                "no transient notice follows visible progress"
+            );
+            view.browser().clear_observer();
+            window.destroy();
+        },
+    );
+}
+
+#[test]
+fn normal_copy_fast_shows_no_send_to_toast() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::normal_copy_fast_shows_no_send_to_toast",
+        || {
+            let fixture = tempfile::tempdir().expect("normal copy toast fixture");
+            let source_dir = fixture.path().join("source");
+            let destination = fixture.path().join("destination");
+            std::fs::create_dir_all(&source_dir).expect("source directory");
+            std::fs::create_dir_all(&destination).expect("destination directory");
+            let source = source_dir.join("photo.txt");
+            std::fs::write(&source, b"photo").expect("source file");
+            let (view, overlay, window, events) = open_transfer_browser(&source_dir);
+            view.state
+                .show_transfer_dialog(vec![transfer_entry(&source)], false);
+            assert!(wait_for_modal_layer(&overlay), "Copy dialog opens");
+            let field = destination_field(&overlay);
+            field.set_text(&destination.to_string_lossy());
+            click_button(&overlay, "Copy here");
+            wait_until(
+                || {
+                    destination.join("photo.txt").exists()
+                        && events.borrow().iter().any(|event| {
+                            matches!(event, crate::app::BrowserEvent::TransferFinished { .. })
+                        })
+                },
+                "the normal fast copy",
+            );
+            assert!(
+                send_to_toast_labels(&overlay).is_empty(),
+                "a normal copy never shows send-to feedback"
+            );
+            view.browser().clear_observer();
+            window.destroy();
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn send_to_failure_shows_no_toast() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::send_to_failure_shows_no_toast",
+        || {
+            let SendToToastFixture {
+                _tempdir,
+                view,
+                overlay,
+                window,
+                events,
+                source_dir,
+                device,
+            } = open_send_to_toast_browser("send-to failure fixture", &["a.txt"]);
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&device, std::fs::Permissions::from_mode(0o555))
+                .expect("read-only device");
+            let device_root = device.clone();
+            view.state.send_to_removable_device_with_resolver(
+                "volume:toast-device",
+                vec![Location::local(source_dir.join("a.txt"))],
+                move |id| (id == "volume:toast-device").then(|| device_root.clone()),
+            );
+            wait_until(
+                || has_visible_button(&overlay, "Unable to complete operation"),
+                "the failure dialog",
+            );
+            assert!(
+                send_to_toast_labels(&overlay).is_empty(),
+                "a failed send-to shows no success notice"
+            );
+            assert!(
+                events
+                    .borrow()
+                    .iter()
+                    .any(|event| matches!(event, crate::app::BrowserEvent::OperationFailed { .. })),
+                "the failure was reported"
+            );
+            assert!(
+                events
+                    .borrow()
+                    .iter()
+                    .all(|event| !matches!(event, crate::app::BrowserEvent::TransferCompleted)),
+                "no successful completion was reported"
+            );
+            std::fs::set_permissions(&device, std::fs::Permissions::from_mode(0o755))
+                .expect("writable device for cleanup");
+            view.browser().clear_observer();
+            window.destroy();
+        },
+    );
+}
+
+#[test]
+fn send_to_repeated_completions_replace_toast() {
+    crate::test_support::gtk_test(
+        "ui::browser::transfer::tests::send_to_repeated_completions_replace_toast",
+        || {
+            let SendToToastFixture {
+                _tempdir,
+                view,
+                overlay,
+                window,
+                events,
+                source_dir,
+                device,
+            } = open_send_to_toast_browser(
+                "send-to repeated toast fixture",
+                &["a.txt", "b.txt", "c.txt"],
+            );
+            for (id, names) in [
+                ("volume:toast-first", vec!["a.txt"]),
+                ("volume:toast-second", vec!["b.txt", "c.txt"]),
+            ] {
+                let device_root = device.clone();
+                let sources = names
+                    .iter()
+                    .map(|name| Location::local(source_dir.join(name)))
+                    .collect();
+                view.state
+                    .send_to_removable_device_with_resolver(id, sources, move |resolved| {
+                        (resolved == id).then(|| device_root.clone())
+                    });
+                wait_until(
+                    || {
+                        names.iter().all(|name| device.join(name).exists())
+                            && events.borrow().iter().any(|event| {
+                                matches!(event, crate::app::BrowserEvent::TransferFinished { .. })
+                            })
+                    },
+                    "each repeated send-to copy",
+                );
+                events.borrow_mut().clear();
+            }
+            assert_eq!(
+                send_to_toast_labels(&overlay),
+                ["2 items copied to VANIA"],
+                "the second success replaces the first notice"
             );
             view.browser().clear_observer();
             window.destroy();
