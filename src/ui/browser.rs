@@ -17,7 +17,7 @@ use crate::ui::browser::location::{
 };
 use crate::ui::browser::paths::{can_pin_entry, is_trash_location};
 use crate::ui::browser::peek::{PeekAnchor, PeekView};
-use crate::ui::browser::progress::FileProgressView;
+use crate::ui::browser::progress::{FileProgressView, TransferProgressSnapshot};
 use crate::ui::browser::transfer::FinishedSendToCompletion;
 use crate::ui::browser::transfer::PendingSendToCompletion;
 use crate::ui::browser::transfer::duplicate_transfer;
@@ -203,8 +203,15 @@ pub(super) struct ViewState {
     send_to_success_widget: RefCell<Option<gtk::Widget>>,
     send_to_success_generation: Cell<u64>,
     file_operation_progress: Cell<(usize, usize)>,
-    transfer_progress: Cell<Option<(usize, u64, Option<u64>)>>,
+    transfer_progress: Cell<Option<TransferProgressSnapshot>>,
+    transfer_current_file: RefCell<Option<String>>,
+    transfer_rate_sample: Cell<Option<(std::time::Instant, u64)>>,
+    transfer_rate_bytes_per_second: Cell<Option<f64>>,
     flushing_to_device: Cell<bool>,
+    transfer_cancel_requested: Cell<bool>,
+    transfer_cancel_timed_out: Cell<bool>,
+    transfer_cancel_timeout: RefCell<Option<glib::SourceId>>,
+    transfer_warning_banner: RefCell<Option<gtk::Box>>,
     pin_handler: RefCell<Option<PinHandler>>,
     unpin_handler: RefCell<Option<UnpinHandler>>,
     pin_status_handler: RefCell<Option<PinStatusHandler>>,
@@ -576,7 +583,14 @@ impl BrowserView {
             send_to_success_generation: Cell::new(0),
             file_operation_progress: Cell::new((0, 0)),
             transfer_progress: Cell::new(None),
+            transfer_current_file: RefCell::new(None),
+            transfer_rate_sample: Cell::new(None),
+            transfer_rate_bytes_per_second: Cell::new(None),
             flushing_to_device: Cell::new(false),
+            transfer_cancel_requested: Cell::new(false),
+            transfer_cancel_timed_out: Cell::new(false),
+            transfer_cancel_timeout: RefCell::new(None),
+            transfer_warning_banner: RefCell::new(None),
             pin_handler: RefCell::new(None),
             unpin_handler: RefCell::new(None),
             pin_status_handler: RefCell::new(None),

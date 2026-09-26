@@ -628,16 +628,31 @@ impl ViewState {
                     "Cancelling will not undo completed changes",
                     Rc::new(move || browser.cancel_file_operation()),
                 );
-                self.update_transfer_progress(0, 0, None);
+                self.update_transfer_progress(0, 0, None, 0, None);
             }
             BrowserEvent::TransferProgress {
                 completed_items,
+                completed_files,
+                total_files,
+                current_file,
                 transferred_bytes,
                 total_bytes,
             } => {
-                self.update_transfer_progress(*completed_items, *transferred_bytes, *total_bytes);
+                self.transfer_current_file.replace(current_file.clone());
+                self.update_transfer_progress(
+                    *completed_items,
+                    *completed_files,
+                    *total_files,
+                    *transferred_bytes,
+                    *total_bytes,
+                );
             }
             BrowserEvent::FlushingToDevice => self.show_device_flush_status(),
+            BrowserEvent::TransferCancellationPending => show_error_dialog(
+                &self.overlay,
+                "Transfer cancellation pending",
+                "The device may still be writing. Wait for the transfer to finish or fail before starting another file operation. Do not unplug until you can safely eject it.",
+            ),
             BrowserEvent::TransferFinished { moved_locations } => {
                 if !moved_locations.is_empty() {
                     self.complete_cut_transfer(moved_locations);
